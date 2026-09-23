@@ -1,0 +1,8 @@
+{
+  "name": "Quiz Explore",
+  "description": "Premium glassmorphic offline quiz app with Practice and Exam modes, JSON import/export, quiz editor, rich statistics, and voice appreciation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
