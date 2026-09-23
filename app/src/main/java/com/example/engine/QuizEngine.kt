@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.data.local.entity.UnfinishedQuizEntity
+import com.example.data.model.AiEvaluationResult
 import com.example.data.model.AnswerComparison
 import com.example.data.model.QuestionReviewItem
 import com.example.data.model.QuestionSchema
@@ -18,6 +19,7 @@ import org.json.JSONObject
 
 enum class AnswerState {
     UNANSWERED,
+    EVALUATING,
     CORRECT,
     INCORRECT,
     ANSWER_NOT_SET
@@ -28,7 +30,10 @@ data class QuestionAnswerState(
     val selectedOptionIndex: Int? = null,
     val userTextAnswer: String? = null,
     val answerState: AnswerState = AnswerState.UNANSWERED,
-    val isLocked: Boolean = false
+    val isLocked: Boolean = false,
+    val isAiEvaluating: Boolean = false,
+    val aiEvaluation: AiEvaluationResult? = null,
+    val banglaExplanation: String? = null
 )
 
 data class ActiveQuestion(
@@ -59,13 +64,18 @@ data class AnswerFeedback(
     val explanation: String?,
     val userTextAnswer: String? = null,
     val correctTextAnswer: String? = null,
-    val isAnswerNotSet: Boolean = false
+    val isAnswerNotSet: Boolean = false,
+    val banglaExplanation: String? = null,
+    val isAiEvaluated: Boolean = false,
+    val isAlternativeAccepted: Boolean = false,
+    val aiEvaluation: AiEvaluationResult? = null
 )
 
 class QuizEngine(
     val quizId: String,
     val quizSchema: QuizSchema,
-    val mode: QuizMode
+    val mode: QuizMode,
+    val aiEvaluator: AiAnswerEvaluator = GeminiAiAnswerEvaluator()
 ) {
     val questions: List<ActiveQuestion>
     val totalQuestions: Int
@@ -339,8 +349,8 @@ class QuizEngine(
     }
 
     /**
-     * Handles text answer submission in Practice Mode for Fill-in-the-blank questions.
-     * Locks the question immediately, evaluates answer, awards points if correct.
+     * Handles text answer submission in Practice Mode for Fill-in-the-blank questions (synchronous).
+     * Evaluates exact answer matching, awards points if correct.
      */
     @Synchronized
     fun submitTextAnswer(answerText: String): AnswerFeedback? {
@@ -383,12 +393,27 @@ class QuizEngine(
         val answerState = if (isCorrect) AnswerState.CORRECT else AnswerState.INCORRECT
         val pointsEarned = if (isCorrect) q.points else 0
 
+        val banglaExpl = if (isCorrect) {
+            val matched = q.acceptedAnswers.firstOrNull {
+                AnswerComparison.normalize(it) == AnswerComparison.normalize(trimmed)
+            } ?: trimmed
+            "তোমার উত্তরটি সঠিক। এখানে ‘$matched’ শব্দটি বাক্যের অর্থ ও grammar অনুযায়ী ঠিকভাবে বসে।"
+        } else {
+            val correctListStr = if (q.acceptedAnswers.size > 1) {
+                q.acceptedAnswers.joinToString(", ")
+            } else {
+                q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" }
+            }
+            "তোমার উত্তর ‘$trimmed’ সঠিক উত্তরের সাথে মেলেনি। সঠিক উত্তর: $correctListStr।"
+        }
+
         questionStates[qIndex] = QuestionAnswerState(
             isAnswered = true,
             selectedOptionIndex = null,
             userTextAnswer = trimmed,
             answerState = answerState,
-            isLocked = true
+            isLocked = true,
+            banglaExplanation = banglaExpl
         )
 
         if (isCorrect) {
@@ -407,8 +432,239 @@ class QuizEngine(
             explanation = q.explanation,
             userTextAnswer = trimmed,
             correctTextAnswer = q.fillBlankAnswer,
-            isAnswerNotSet = false
+            isAnswerNotSet = false,
+            banglaExplanation = banglaExpl
         )
+    }
+
+    /**
+     * Practice Mode Fill-in-the-Blank submission with AI answer evaluation.
+     *
+     * 1. Check normal accepted answers first. If exact match -> CORRECT immediately without calling AI.
+     * 2. If exact match fails -> send question, accepted answers, and user's answer to AI evaluator.
+     * 3. AI evaluates meaning, grammar, context, singular/plural, tense, and valid alternatives.
+     * 4. AI response includes structured data and simple Bangla explanation.
+     * 5. If AI fails/unavailable -> falls back safely to exact answer matching.
+     */
+    suspend fun submitPracticeFillBlankAnswer(
+        answerText: String,
+        customEvaluator: AiAnswerEvaluator? = null
+    ): AnswerFeedback? {
+        val q = currentQuestion ?: return null
+        val qIndex = currentQuestionIndex
+        if (q.type != QuestionType.FILL_BLANK) return null
+
+        val currentState = questionStates[qIndex]
+        if (currentState?.isLocked == true || currentState?.isAiEvaluating == true || lockedState[qIndex] == true) {
+            return null // Prevent duplicate requests and submissions
+        }
+
+        val trimmed = answerText.trim()
+        userTextAnswers[qIndex] = trimmed
+
+        if (!q.hasConfiguredAnswer) {
+            lockedState[qIndex] = true
+            questionStates[qIndex] = QuestionAnswerState(
+                isAnswered = true,
+                selectedOptionIndex = null,
+                userTextAnswer = trimmed,
+                answerState = AnswerState.ANSWER_NOT_SET,
+                isLocked = true
+            )
+            return AnswerFeedback(
+                isCorrect = false,
+                selectedOptionIndex = -1,
+                correctOptionIndex = -1,
+                streak = streak,
+                pointsEarned = 0,
+                explanation = q.explanation,
+                userTextAnswer = trimmed,
+                correctTextAnswer = "Answer not available",
+                isAnswerNotSet = true
+            )
+        }
+
+        // STEP 1: Check normal accepted answers first (Trimming, repeated spaces, case insensitivity)
+        val isExactMatch = AnswerComparison.isAnswerCorrect(trimmed, q.acceptedAnswers)
+        if (isExactMatch) {
+            lockedState[qIndex] = true
+            val pointsEarned = q.points
+            score += pointsEarned
+            streak += 1
+
+            val matchedAnswer = q.acceptedAnswers.firstOrNull {
+                AnswerComparison.normalize(it) == AnswerComparison.normalize(trimmed)
+            } ?: trimmed
+
+            val banglaExpl = "তোমার উত্তরটি সঠিক। এখানে ‘$matchedAnswer’ শব্দটি বাক্যের অর্থ ও grammar অনুযায়ী ঠিকভাবে বসে।"
+
+            questionStates[qIndex] = QuestionAnswerState(
+                isAnswered = true,
+                selectedOptionIndex = null,
+                userTextAnswer = trimmed,
+                answerState = AnswerState.CORRECT,
+                isLocked = true,
+                isAiEvaluating = false,
+                aiEvaluation = null,
+                banglaExplanation = banglaExpl
+            )
+
+            return AnswerFeedback(
+                isCorrect = true,
+                selectedOptionIndex = -1,
+                correctOptionIndex = -1,
+                streak = streak,
+                pointsEarned = pointsEarned,
+                explanation = q.explanation,
+                userTextAnswer = trimmed,
+                correctTextAnswer = q.fillBlankAnswer,
+                isAnswerNotSet = false,
+                banglaExplanation = banglaExpl,
+                isAiEvaluated = false,
+                isAlternativeAccepted = false,
+                aiEvaluation = null
+            )
+        }
+
+        // STEP 2: Non-exact match -> Trigger AI evaluation
+        // Mark question evaluating state (instantly locks UI and displays AI evaluating indicator)
+        questionStates[qIndex] = QuestionAnswerState(
+            isAnswered = true,
+            selectedOptionIndex = null,
+            userTextAnswer = trimmed,
+            answerState = AnswerState.EVALUATING,
+            isLocked = true,
+            isAiEvaluating = true
+        )
+
+        val evaluatorToUse = customEvaluator ?: aiEvaluator
+        val aiResult = try {
+            evaluatorToUse.evaluateAnswer(
+                questionText = q.questionText,
+                acceptedAnswers = q.acceptedAnswers,
+                userAnswer = trimmed
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+
+        lockedState[qIndex] = true
+
+        if (aiResult.isSuccess) {
+            val evaluation = aiResult.getOrThrow()
+            if (evaluation.isCorrect) {
+                // AI determined answer is a genuinely valid alternative in this context!
+                val pointsEarned = q.points
+                score += pointsEarned
+                streak += 1
+
+                val banglaExpl = evaluation.banglaExplanation.ifBlank {
+                    "তোমার উত্তরটি সঠিক। এখানে ‘$trimmed’ শব্দটি বাক্যের অর্থ ও grammar অনুযায়ী গ্রহণযোগ্য।"
+                }
+
+                questionStates[qIndex] = QuestionAnswerState(
+                    isAnswered = true,
+                    selectedOptionIndex = null,
+                    userTextAnswer = trimmed,
+                    answerState = AnswerState.CORRECT,
+                    isLocked = true,
+                    isAiEvaluating = false,
+                    aiEvaluation = evaluation,
+                    banglaExplanation = banglaExpl
+                )
+
+                return AnswerFeedback(
+                    isCorrect = true,
+                    selectedOptionIndex = -1,
+                    correctOptionIndex = -1,
+                    streak = streak,
+                    pointsEarned = pointsEarned,
+                    explanation = q.explanation,
+                    userTextAnswer = trimmed,
+                    correctTextAnswer = q.fillBlankAnswer,
+                    isAnswerNotSet = false,
+                    banglaExplanation = banglaExpl,
+                    isAiEvaluated = true,
+                    isAlternativeAccepted = true,
+                    aiEvaluation = evaluation
+                )
+            } else {
+                // AI determined answer is incorrect
+                streak = 0
+                val correctListStr = if (q.acceptedAnswers.size > 1) {
+                    q.acceptedAnswers.joinToString(", ")
+                } else {
+                    q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" }
+                }
+
+                val banglaExpl = evaluation.banglaExplanation.ifBlank {
+                    "তোমার উত্তর ‘$trimmed’ এখানে ঠিক নয়, কারণ বাক্যের অর্থ ও grammar অনুযায়ী সঠিক শব্দটি অন্যটি। সঠিক উত্তর: $correctListStr।"
+                }
+
+                questionStates[qIndex] = QuestionAnswerState(
+                    isAnswered = true,
+                    selectedOptionIndex = null,
+                    userTextAnswer = trimmed,
+                    answerState = AnswerState.INCORRECT,
+                    isLocked = true,
+                    isAiEvaluating = false,
+                    aiEvaluation = evaluation,
+                    banglaExplanation = banglaExpl
+                )
+
+                return AnswerFeedback(
+                    isCorrect = false,
+                    selectedOptionIndex = -1,
+                    correctOptionIndex = -1,
+                    streak = streak,
+                    pointsEarned = 0,
+                    explanation = q.explanation,
+                    userTextAnswer = trimmed,
+                    correctTextAnswer = q.fillBlankAnswer,
+                    isAnswerNotSet = false,
+                    banglaExplanation = banglaExpl,
+                    isAiEvaluated = true,
+                    isAlternativeAccepted = false,
+                    aiEvaluation = evaluation
+                )
+            }
+        } else {
+            // AI was unavailable, timed out, or returned error -> Fallback to exact matching (failed)
+            streak = 0
+            val correctListStr = if (q.acceptedAnswers.size > 1) {
+                q.acceptedAnswers.joinToString(", ")
+            } else {
+                q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" }
+            }
+            val fallbackExpl = "তোমার উত্তর ‘$trimmed’ সঠিক উত্তরের সাথে মেলেনি। সঠিক উত্তর: $correctListStr।"
+
+            questionStates[qIndex] = QuestionAnswerState(
+                isAnswered = true,
+                selectedOptionIndex = null,
+                userTextAnswer = trimmed,
+                answerState = AnswerState.INCORRECT,
+                isLocked = true,
+                isAiEvaluating = false,
+                aiEvaluation = null,
+                banglaExplanation = fallbackExpl
+            )
+
+            return AnswerFeedback(
+                isCorrect = false,
+                selectedOptionIndex = -1,
+                correctOptionIndex = -1,
+                streak = streak,
+                pointsEarned = 0,
+                explanation = q.explanation,
+                userTextAnswer = trimmed,
+                correctTextAnswer = q.fillBlankAnswer,
+                isAnswerNotSet = false,
+                banglaExplanation = fallbackExpl,
+                isAiEvaluated = false,
+                isAlternativeAccepted = false,
+                aiEvaluation = null
+            )
+        }
     }
 
     /**
@@ -560,7 +816,8 @@ class QuizEngine(
                 explanation = q.explanation,
                 questionType = q.type,
                 acceptedAnswers = q.acceptedAnswers,
-                isAnswerNotSet = isAnswerNotSet
+                isAnswerNotSet = isAnswerNotSet,
+                banglaExplanation = questionStates[index]?.banglaExplanation
             )
         }
 

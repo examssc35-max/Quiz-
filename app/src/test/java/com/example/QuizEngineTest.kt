@@ -1046,5 +1046,235 @@ class QuizEngineTest {
         assertNotNull(feedback)
         assertFalse(feedback!!.isCorrect)
     }
+
+    @Test
+    fun testAiEvaluation_exactMatchBypassesAi() = kotlinx.coroutines.runBlocking {
+        var aiCalled = false
+        val mockEvaluator = object : com.example.engine.AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<com.example.data.model.AiEvaluationResult> {
+                aiCalled = true
+                return Result.failure(IllegalStateException("AI should not be called on exact match"))
+            }
+        }
+
+        val json = """
+            {
+              "title": "Exact Match Test",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Air is an important ______.",
+                  "answer": ["element"],
+                  "points": 5
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+        val engine = QuizEngine("exact_ai", schema, QuizMode.PRACTICE, aiEvaluator = mockEvaluator)
+
+        val feedback = engine.submitPracticeFillBlankAnswer("  element  ")
+        assertNotNull(feedback)
+        assertTrue(feedback!!.isCorrect)
+        assertEquals(5, engine.score)
+        assertFalse("AI evaluator must NOT be called on exact match", aiCalled)
+        assertNotNull(feedback.banglaExplanation)
+    }
+
+    @Test
+    fun testAiEvaluation_callsAiOnNonExactMatchAndAcceptsValidAlternative() = kotlinx.coroutines.runBlocking {
+        var aiCalledWith: Triple<String, List<String>, String>? = null
+        val mockEvaluator = object : com.example.engine.AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<com.example.data.model.AiEvaluationResult> {
+                aiCalledWith = Triple(questionText, acceptedAnswers, userAnswer)
+                return Result.success(
+                    com.example.data.model.AiEvaluationResult(
+                        isCorrect = true,
+                        confidence = 0.95,
+                        reason = "Alternative valid answer in context",
+                        banglaExplanation = "তোমার উত্তরটি সঠিক। এখানে ‘disposal’ শব্দটি বাক্যের অর্থ ও grammar অনুযায়ী ঠিকভাবে বসে।",
+                        matchedAnswer = "management"
+                    )
+                )
+            }
+        }
+
+        val json = """
+            {
+              "title": "Alternative Answer Test",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Proper waste ______ is crucial.",
+                  "answer": ["management"],
+                  "points": 5
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+        val engine = QuizEngine("alt_ai", schema, QuizMode.PRACTICE, aiEvaluator = mockEvaluator)
+
+        val feedback = engine.submitPracticeFillBlankAnswer("disposal")
+        assertNotNull(feedback)
+        assertTrue("AI accepted alternative must mark correct", feedback!!.isCorrect)
+        assertEquals(5, engine.score)
+        assertEquals(1, engine.streak)
+        assertNotNull(aiCalledWith)
+        assertEquals("disposal", aiCalledWith?.third)
+        assertTrue(feedback.isAiEvaluated)
+        assertTrue(feedback.isAlternativeAccepted)
+        assertEquals(
+            "তোমার উত্তরটি সঠিক। এখানে ‘disposal’ শব্দটি বাক্যের অর্থ ও grammar অনুযায়ী ঠিকভাবে বসে।",
+            feedback.banglaExplanation
+        )
+    }
+
+    @Test
+    fun testAiEvaluation_rejectsGrammaticallyWrongForm() = kotlinx.coroutines.runBlocking {
+        val mockEvaluator = object : com.example.engine.AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<com.example.data.model.AiEvaluationResult> {
+                return Result.success(
+                    com.example.data.model.AiEvaluationResult(
+                        isCorrect = false,
+                        confidence = 0.98,
+                        reason = "Singular noun required after 'the most important'",
+                        banglaExplanation = "তোমার উত্তর ‘elements’ এখানে ঠিক নয়, কারণ ‘the most important’ এর পরে এই বাক্যে singular noun দরকার। তাই ‘element’ সঠিক।",
+                        matchedAnswer = "element"
+                    )
+                )
+            }
+        }
+
+        val json = """
+            {
+              "title": "Grammar Check Test",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Air is the most important ______ of human environment.",
+                  "answer": "element",
+                  "points": 5
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+        val engine = QuizEngine("grammar_ai", schema, QuizMode.PRACTICE, aiEvaluator = mockEvaluator)
+
+        val feedback = engine.submitPracticeFillBlankAnswer("elements")
+        assertNotNull(feedback)
+        assertFalse("AI must reject grammatically incorrect plural", feedback!!.isCorrect)
+        assertEquals(0, engine.score)
+        assertEquals(0, engine.streak)
+        assertTrue(feedback.isAiEvaluated)
+        assertFalse(feedback.isAlternativeAccepted)
+        assertEquals(
+            "তোমার উত্তর ‘elements’ এখানে ঠিক নয়, কারণ ‘the most important’ এর পরে এই বাক্যে singular noun দরকার। তাই ‘element’ সঠিক।",
+            feedback.banglaExplanation
+        )
+    }
+
+    @Test
+    fun testAiEvaluation_fallsBackGracefullyWhenAiFails() = kotlinx.coroutines.runBlocking {
+        val failingEvaluator = object : com.example.engine.AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<com.example.data.model.AiEvaluationResult> {
+                return Result.failure(java.net.SocketTimeoutException("AI timeout"))
+            }
+        }
+
+        val json = """
+            {
+              "title": "Fallback Test",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "These materials cause ______ to the environment.",
+                  "answer": ["harm", "damage"],
+                  "points": 5
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+        val engine = QuizEngine("fallback_ai", schema, QuizMode.PRACTICE, aiEvaluator = failingEvaluator)
+
+        val feedback = engine.submitPracticeFillBlankAnswer("hurt")
+        assertNotNull(feedback)
+        assertFalse("When AI fails and exact match fails, must mark incorrect", feedback!!.isCorrect)
+        assertEquals(0, engine.score)
+        assertNotNull(feedback.banglaExplanation)
+        assertTrue(feedback.banglaExplanation!!.contains("harm, damage"))
+    }
+
+    @Test
+    fun testAiEvaluation_preventsDuplicateSubmissions() = kotlinx.coroutines.runBlocking {
+        val mockEvaluator = object : com.example.engine.AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<com.example.data.model.AiEvaluationResult> {
+                return Result.success(
+                    com.example.data.model.AiEvaluationResult(
+                        isCorrect = true,
+                        confidence = 0.9,
+                        reason = "Valid",
+                        banglaExplanation = "সঠিক",
+                        matchedAnswer = "water"
+                    )
+                )
+            }
+        }
+
+        val json = """
+            {
+              "title": "Duplicate Prevention Test",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Plants need ______ to grow.",
+                  "answer": "water",
+                  "points": 2
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+        val engine = QuizEngine("dup_ai", schema, QuizMode.PRACTICE, aiEvaluator = mockEvaluator)
+
+        val firstFeedback = engine.submitPracticeFillBlankAnswer("liquid")
+        assertNotNull(firstFeedback)
+
+        // Second submission should be blocked because the question is locked
+        val secondFeedback = engine.submitPracticeFillBlankAnswer("liquid")
+        assertEquals(null, secondFeedback)
+    }
 }
 

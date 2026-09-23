@@ -54,11 +54,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.audio.AppSoundManager
+import com.example.data.model.AnswerComparison
 import com.example.data.model.QuestionType
 import com.example.data.model.QuizMode
 import com.example.data.model.QuizResultSummary
 import com.example.engine.AnswerState
 import com.example.engine.QuizEngine
+import kotlinx.coroutines.launch
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassConfirmDialog
 import com.example.ui.components.GlassFillBlankInput
@@ -99,6 +101,7 @@ fun QuizPlayScreen(
     var showSubmitConfirmDialog by remember { mutableStateOf(false) }
     var showExitConfirmDialog by remember { mutableStateOf(false) }
     var showNavigatorSheet by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     // Recomposition trigger on answer update
     var answersVersion by remember { mutableIntStateOf(0) }
@@ -276,6 +279,9 @@ fun QuizPlayScreen(
                             mutableStateOf(qState.userTextAnswer ?: engine.userTextAnswers[currentQIndex] ?: "")
                         }
 
+                        val isAlternativeAccepted = qState.aiEvaluation?.isCorrect == true &&
+                                !AnswerComparison.isAnswerCorrect(typedAnswer, currentQ.acceptedAnswers)
+
                         GlassFillBlankInput(
                             userAnswerText = typedAnswer,
                             onAnswerChange = { newText ->
@@ -291,30 +297,36 @@ fun QuizPlayScreen(
                             correctAnswerText = currentQ.fillBlankAnswer,
                             acceptedAnswers = currentQ.acceptedAnswers,
                             hasConfiguredAnswer = currentQ.hasConfiguredAnswer,
+                            isAiEvaluating = qState.isAiEvaluating,
+                            banglaExplanation = qState.banglaExplanation,
+                            isAlternativeAccepted = isAlternativeAccepted,
                             onSubmit = {
-                                if (engine.mode == QuizMode.PRACTICE) {
-                                    val feedback = engine.submitTextAnswer(typedAnswer)
-                                    if (feedback != null) {
-                                        if (feedback.isAnswerNotSet) {
-                                            soundManager.playClickSound(soundEnabled)
-                                        } else if (feedback.isCorrect) {
-                                            soundManager.playCorrectSound(soundEnabled)
-                                            soundManager.vibrate(vibrationEnabled, isSuccess = true)
-                                            soundManager.speakAppreciation(
-                                                isCorrect = true,
-                                                streak = feedback.streak,
-                                                voiceEnabled = voiceEnabled,
-                                                isBengaliQuiz = isBengali
-                                            )
-                                        } else {
-                                            soundManager.playWrongSound(soundEnabled)
-                                            soundManager.vibrate(vibrationEnabled, isSuccess = false)
-                                            soundManager.speakAppreciation(
-                                                isCorrect = false,
-                                                streak = feedback.streak,
-                                                voiceEnabled = voiceEnabled,
-                                                isBengaliQuiz = isBengali
-                                            )
+                                if (engine.mode == QuizMode.PRACTICE && !qState.isLocked && !qState.isAiEvaluating) {
+                                    coroutineScope.launch {
+                                        val feedback = engine.submitPracticeFillBlankAnswer(typedAnswer)
+                                        if (feedback != null) {
+                                            answersVersion++
+                                            if (feedback.isAnswerNotSet) {
+                                                soundManager.playClickSound(soundEnabled)
+                                            } else if (feedback.isCorrect) {
+                                                soundManager.playCorrectSound(soundEnabled)
+                                                soundManager.vibrate(vibrationEnabled, isSuccess = true)
+                                                soundManager.speakAppreciation(
+                                                    isCorrect = true,
+                                                    streak = feedback.streak,
+                                                    voiceEnabled = voiceEnabled,
+                                                    isBengaliQuiz = isBengali
+                                                )
+                                            } else {
+                                                soundManager.playWrongSound(soundEnabled)
+                                                soundManager.vibrate(vibrationEnabled, isSuccess = false)
+                                                soundManager.speakAppreciation(
+                                                    isCorrect = false,
+                                                    streak = feedback.streak,
+                                                    voiceEnabled = voiceEnabled,
+                                                    isBengaliQuiz = isBengali
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -427,8 +439,8 @@ fun QuizPlayScreen(
                             }
                         }
 
-                        // Explanation Card for both MCQ and Fill Blank
-                        if (showExplanationsSetting && !currentQ.explanation.isNullOrBlank()) {
+                        // Explanation Card for MCQ (or Fill Blank fallback when no Bangla explanation)
+                        if (showExplanationsSetting && !currentQ.explanation.isNullOrBlank() && (currentQ.type == QuestionType.MCQ || qState.banglaExplanation.isNullOrBlank())) {
                             Spacer(modifier = Modifier.height(12.dp))
                             GlassCard(
                                 modifier = Modifier.fillMaxWidth(),

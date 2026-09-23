@@ -19,7 +19,8 @@ data class QuestionReviewItem(
     val explanation: String?,
     val questionType: QuestionType = QuestionType.MCQ,
     val acceptedAnswers: List<String> = emptyList(),
-    val isAnswerNotSet: Boolean = false
+    val isAnswerNotSet: Boolean = false,
+    val banglaExplanation: String? = null
 )
 
 data class QuizResultSummary(

@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -432,8 +433,49 @@ fun ReviewQuestionCard(
                 }
             }
 
-            // Explanation
-            if (!item.explanation.isNullOrBlank()) {
+            // Bangla Explanation (if available)
+            if (!item.banglaExplanation.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    backgroundColor = if (item.isCorrect) CorrectGreenBg.copy(alpha = 0.20f) else Color(0x221E293B),
+                    borderBrush = if (item.isCorrect) SolidColor(CorrectGreenBorder) else GlassBorderBrush
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            imageVector = if (item.isCorrect) Icons.Default.Check else Icons.Default.Info,
+                            contentDescription = "Explanation",
+                            tint = if (item.isCorrect) CorrectGreen else AccentCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "বাংলা ব্যাখ্যা (Bangla Explanation)",
+                                color = if (item.isCorrect) Color(0xFF6EE7B7) else AccentCyan,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = item.banglaExplanation,
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                                lineHeight = 19.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            // General / Stored Explanation
+            if (!item.explanation.isNullOrBlank() && item.explanation != item.banglaExplanation) {
                 Spacer(modifier = Modifier.height(14.dp))
                 GlassCard(
                     modifier = Modifier.fillMaxWidth(),
