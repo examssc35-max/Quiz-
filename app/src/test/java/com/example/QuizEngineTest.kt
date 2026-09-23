@@ -739,5 +739,151 @@ class QuizEngineTest {
         assertEquals("4", q2Review.userAnswerText)
         assertTrue(q2Review.isCorrect)
     }
+
+    @Test
+    fun testFillBlank_emptyAnswer_validatesAndImportsSuccessfully() {
+        val json = """
+            {
+              "title": "Environmental Studies",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Air pollution is one kind of (a) — for the environment.",
+                  "answer": "",
+                  "points": 1,
+                  "explanation": ""
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parseResult = QuizJsonParser.validateAndParse(json)
+        assertTrue("JSON with empty fill_blank answer must parse successfully", parseResult.isSuccess)
+
+        val schema = parseResult.getOrThrow()
+        assertEquals(1, schema.questions.size)
+        val q = schema.questions[0]
+        assertEquals("q1", q.id)
+        assertEquals(com.example.data.model.QuestionType.FILL_BLANK, q.type)
+        assertEquals("", q.fillBlankAnswer)
+        assertTrue(q.acceptedAnswers.isEmpty())
+        assertFalse(q.isAnswerConfigured)
+    }
+
+    @Test
+    fun testFillBlank_emptyAnswer_practiceMode_notJudged() {
+        val schema = QuizSchema(
+            title = "Empty Answer Practice",
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    type = com.example.data.model.QuestionType.FILL_BLANK,
+                    question = "Air pollution is one kind of (a) — for the environment.",
+                    fillBlankAnswer = "",
+                    acceptedAnswers = emptyList(),
+                    points = 2
+                )
+            )
+        )
+
+        val engine = QuizEngine("practice_empty", schema, QuizMode.PRACTICE)
+        val activeQ = engine.currentQuestion
+        assertNotNull(activeQ)
+        assertFalse(activeQ!!.hasConfiguredAnswer)
+
+        // Submit user answer
+        val feedback = engine.submitTextAnswer("threat")
+        assertNotNull(feedback)
+        assertTrue("Feedback must flag answer as not set", feedback!!.isAnswerNotSet)
+        assertFalse("Feedback must not mark as correct", feedback.isCorrect)
+        assertEquals(0, feedback.pointsEarned)
+        assertEquals(0, engine.score)
+        assertEquals(0, engine.streak)
+        assertEquals("Answer not available", feedback.correctTextAnswer)
+
+        val state = engine.questionStates[0]
+        assertNotNull(state)
+        assertEquals(com.example.engine.AnswerState.ANSWER_NOT_SET, state!!.answerState)
+        assertTrue(state.isLocked)
+    }
+
+    @Test
+    fun testFillBlank_emptyAnswer_examMode_treatedAsUnansweredInScoring() {
+        val schema = QuizSchema(
+            title = "Empty Answer Exam",
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    type = com.example.data.model.QuestionType.FILL_BLANK,
+                    question = "Air pollution is one kind of (a) — for the environment.",
+                    fillBlankAnswer = "",
+                    acceptedAnswers = emptyList(),
+                    points = 5
+                ),
+                QuestionSchema(
+                    id = "q2",
+                    type = com.example.data.model.QuestionType.MCQ,
+                    question = "2 + 2 = ?",
+                    options = listOf("3", "4", "5"),
+                    answer = 1,
+                    points = 5
+                )
+            )
+        )
+
+        val engine = QuizEngine("exam_empty", schema, QuizMode.EXAM)
+
+        // User enters an answer for Q1
+        engine.updateExamTextAnswer("hazard")
+        assertEquals("hazard", engine.userTextAnswers[0])
+
+        // User answers Q2 correctly
+        assertTrue(engine.nextQuestion())
+        engine.selectOption(1)
+
+        // Submit Exam
+        val summary = engine.submitExam()
+        assertEquals(2, summary.totalQuestions)
+        // Q1 is treated as unanswered during scoring because its answer is not configured
+        assertEquals(1, summary.correctCount)
+        assertEquals(0, summary.wrongCount)
+        assertEquals(1, summary.unansweredCount)
+        assertEquals(5, summary.score)
+
+        // Verify review items
+        val q1Review = summary.reviewItems[0]
+        assertTrue(q1Review.isAnswerNotSet)
+        assertFalse(q1Review.isCorrect)
+        assertEquals(0, q1Review.pointsEarned)
+        assertEquals("hazard", q1Review.userAnswerText)
+        assertEquals("Answer not available", q1Review.correctAnswerText)
+
+        val q2Review = summary.reviewItems[1]
+        assertFalse(q2Review.isAnswerNotSet)
+        assertTrue(q2Review.isCorrect)
+        assertEquals(5, q2Review.pointsEarned)
+    }
+
+    @Test
+    fun testMcqValidation_remainsStrict() {
+        val invalidMcqJson = """
+            {
+              "title": "Strict MCQ Test",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "mcq",
+                  "question": "What is A?",
+                  "options": ["Option 1", "Option 2"],
+                  "answer": 5
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val result = QuizJsonParser.validateAndParse(invalidMcqJson)
+        assertTrue("MCQ with out-of-bounds answer must fail validation", result.isFailure)
+    }
 }
 

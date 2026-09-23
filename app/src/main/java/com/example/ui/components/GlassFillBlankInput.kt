@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
@@ -62,6 +63,7 @@ fun GlassFillBlankInput(
     answerState: AnswerState,
     isLocked: Boolean,
     correctAnswerText: String,
+    hasConfiguredAnswer: Boolean = true,
     onSubmit: () -> Unit,
     isBengali: Boolean,
     modifier: Modifier = Modifier
@@ -69,14 +71,16 @@ fun GlassFillBlankInput(
     val shape = RoundedCornerShape(20.dp)
 
     val isPractice = mode == QuizMode.PRACTICE
-    val isCorrect = isAnswered && answerState == AnswerState.CORRECT
-    val isIncorrect = isAnswered && answerState == AnswerState.INCORRECT
+    val isAnswerNotSet = answerState == AnswerState.ANSWER_NOT_SET || (!hasConfiguredAnswer && isAnswered)
+    val isCorrect = isAnswered && answerState == AnswerState.CORRECT && hasConfiguredAnswer
+    val isIncorrect = isAnswered && answerState == AnswerState.INCORRECT && hasConfiguredAnswer
 
     // Background color
     val backgroundColor by animateColorAsState(
         targetValue = when {
             isPractice && isCorrect -> CorrectGreenBg
             isPractice && isIncorrect -> WrongRedBg
+            isPractice && isAnswerNotSet && isAnswered -> Color(0x221E293B)
             !isPractice && userAnswerText.isNotBlank() -> Color(0x3D2563EB)
             else -> GlassCardSurface
         },
@@ -88,6 +92,7 @@ fun GlassFillBlankInput(
     val borderStroke = when {
         isPractice && isCorrect -> BorderStroke(2.dp, CorrectGreenBorder)
         isPractice && isIncorrect -> BorderStroke(2.dp, WrongRedBorder)
+        isPractice && isAnswerNotSet && isAnswered -> BorderStroke(1.5.dp, Color(0x8038BDF8))
         !isPractice && userAnswerText.isNotBlank() -> BorderStroke(
             2.dp,
             Brush.linearGradient(listOf(Color(0xFF60A5FA), Color(0xFF2563EB)))
@@ -130,37 +135,78 @@ fun GlassFillBlankInput(
 
                     // Status Pill
                     if (isPractice && isAnswered) {
-                        val pillBg = if (isCorrect) CorrectGreenBg else WrongRedBg
-                        val pillBorder = if (isCorrect) CorrectGreenBorder else WrongRedBorder
-                        val pillTextColor = if (isCorrect) Color(0xFF6EE7B7) else Color(0xFFFCA5A5)
-                        val statusText = if (isCorrect) {
-                            if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct"
+                        if (isAnswerNotSet) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x3338BDF8))
+                                    .border(1.dp, Color(0x8038BDF8), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = AccentCyan,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isBengali) "উত্তর উপলব্ধ নেই" else "Answer not available",
+                                        color = Color(0xFFBAE6FD),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         } else {
-                            if (isBengali) "✕ ভুল উত্তর" else "✕ Incorrect"
-                        }
+                            val pillBg = if (isCorrect) CorrectGreenBg else WrongRedBg
+                            val pillBorder = if (isCorrect) CorrectGreenBorder else WrongRedBorder
+                            val pillTextColor = if (isCorrect) Color(0xFF6EE7B7) else Color(0xFFFCA5A5)
+                            val statusText = if (isCorrect) {
+                                if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct"
+                            } else {
+                                if (isBengali) "✕ ভুল উত্তর" else "✕ Incorrect"
+                            }
 
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(pillBg)
+                                    .border(1.dp, pillBorder, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (isCorrect) Icons.Default.Check else Icons.Default.Close,
+                                        contentDescription = null,
+                                        tint = if (isCorrect) CorrectGreen else WrongRed,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = statusText,
+                                        color = pillTextColor,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    } else if (isPractice && !hasConfiguredAnswer) {
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(pillBg)
-                                .border(1.dp, pillBorder, RoundedCornerShape(8.dp))
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                .background(Color(0x2564748B))
+                                .border(1.dp, Color(0x5094A3B8), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (isCorrect) Icons.Default.Check else Icons.Default.Close,
-                                    contentDescription = null,
-                                    tint = if (isCorrect) CorrectGreen else WrongRed,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = statusText,
-                                    color = pillTextColor,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            Text(
+                                text = if (isBengali) "উত্তর উপলব্ধ নেই" else "Answer not available",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     } else if (!isPractice && userAnswerText.isNotBlank()) {
                         Box(
@@ -232,7 +278,11 @@ fun GlassFillBlankInput(
         // Practice Mode: Submit button when unlocked
         if (isPractice && !isLocked) {
             GlassPrimaryButton(
-                text = if (isBengali) "উত্তর জমা দিন" else "Submit Answer",
+                text = if (!hasConfiguredAnswer && userAnswerText.isBlank()) {
+                    if (isBengali) "চালিয়ে যান" else "Continue / Skip"
+                } else {
+                    if (isBengali) "উত্তর জমা দিন" else "Submit Answer"
+                },
                 onClick = onSubmit,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -241,7 +291,7 @@ fun GlassFillBlankInput(
         }
 
         // Practice Mode: When answered & incorrect, show the correct answer immediately
-        if (isPractice && isIncorrect) {
+        if (isPractice && isIncorrect && correctAnswerText.isNotBlank()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -287,6 +337,33 @@ fun GlassFillBlankInput(
                             fontWeight = FontWeight.Bold
                         )
                     }
+                }
+            }
+        } else if (isPractice && isAnswerNotSet && isAnswered) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0x1A38BDF8))
+                    .border(1.dp, Color(0x4038BDF8), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = AccentCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = if (isBengali) "উত্তর উপলব্ধ নেই (মূল্যায়ন করা হবে না)।" else "Answer not available for this question (not judged).",
+                        color = Color(0xFFBAE6FD),
+                        fontSize = 13.sp
+                    )
                 }
             }
         }

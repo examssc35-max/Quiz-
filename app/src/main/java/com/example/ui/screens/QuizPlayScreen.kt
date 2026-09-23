@@ -289,23 +289,32 @@ fun QuizPlayScreen(
                             answerState = qState.answerState,
                             isLocked = if (engine.mode == QuizMode.PRACTICE) qState.isLocked else false,
                             correctAnswerText = currentQ.fillBlankAnswer,
+                            hasConfiguredAnswer = currentQ.hasConfiguredAnswer,
                             onSubmit = {
                                 if (engine.mode == QuizMode.PRACTICE) {
                                     val feedback = engine.submitTextAnswer(typedAnswer)
                                     if (feedback != null) {
-                                        if (feedback.isCorrect) {
+                                        if (feedback.isAnswerNotSet) {
+                                            soundManager.playClickSound(soundEnabled)
+                                        } else if (feedback.isCorrect) {
                                             soundManager.playCorrectSound(soundEnabled)
                                             soundManager.vibrate(vibrationEnabled, isSuccess = true)
+                                            soundManager.speakAppreciation(
+                                                isCorrect = true,
+                                                streak = feedback.streak,
+                                                voiceEnabled = voiceEnabled,
+                                                isBengaliQuiz = isBengali
+                                            )
                                         } else {
                                             soundManager.playWrongSound(soundEnabled)
                                             soundManager.vibrate(vibrationEnabled, isSuccess = false)
+                                            soundManager.speakAppreciation(
+                                                isCorrect = false,
+                                                streak = feedback.streak,
+                                                voiceEnabled = voiceEnabled,
+                                                isBengaliQuiz = isBengali
+                                            )
                                         }
-                                        soundManager.speakAppreciation(
-                                            isCorrect = feedback.isCorrect,
-                                            streak = feedback.streak,
-                                            voiceEnabled = voiceEnabled,
-                                            isBengaliQuiz = isBengali
-                                        )
                                     }
                                 }
                             },

@@ -76,6 +76,13 @@ data class QuestionSchema(
         points = points,
         explanation = explanation
     )
+
+    val isAnswerConfigured: Boolean
+        get() = if (type == QuestionType.FILL_BLANK) {
+            fillBlankAnswer.isNotBlank() || acceptedAnswers.any { it.isNotBlank() }
+        } else {
+            options.isNotEmpty() && answer in options.indices
+        }
 }
 
 object QuizJsonParser {
@@ -178,13 +185,9 @@ object QuizJsonParser {
                         )
                     )
                 } else {
-                    // Fill-in-the-blank question
-                    if (!qObj.has("answer")) {
-                        throw IllegalArgumentException("Question #${i + 1} is missing 'answer' field for fill_blank")
-                    }
-
+                    // Fill-in-the-blank question: allow "answer": "" or missing/empty answers
                     val acceptedAnswers = mutableListOf<String>()
-                    val rawAnswer = qObj.get("answer")
+                    val rawAnswer = if (qObj.has("answer")) qObj.get("answer") else ""
 
                     when (rawAnswer) {
                         is JSONArray -> {
@@ -203,7 +206,7 @@ object QuizJsonParser {
                         }
                         else -> {
                             val str = rawAnswer.toString().trim()
-                            if (str.isNotEmpty()) {
+                            if (str.isNotEmpty() && str != "null") {
                                 acceptedAnswers.add(str)
                             }
                         }
@@ -220,11 +223,8 @@ object QuizJsonParser {
                         }
                     }
 
-                    if (acceptedAnswers.isEmpty()) {
-                        throw IllegalArgumentException("Question #${i + 1} must have at least one non-empty answer")
-                    }
-
-                    val primaryAnswer = acceptedAnswers.first()
+                    // For type = "fill_blank", allow "answer": "" (do NOT require a non-empty answer)
+                    val primaryAnswer = acceptedAnswers.firstOrNull() ?: ""
 
                     questions.add(
                         QuestionSchema(

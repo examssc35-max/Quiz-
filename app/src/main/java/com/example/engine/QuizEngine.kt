@@ -19,7 +19,8 @@ import org.json.JSONObject
 enum class AnswerState {
     UNANSWERED,
     CORRECT,
-    INCORRECT
+    INCORRECT,
+    ANSWER_NOT_SET
 }
 
 data class QuestionAnswerState(
@@ -40,7 +41,14 @@ data class ActiveQuestion(
     val acceptedAnswers: List<String>,
     val points: Int,
     val explanation: String?
-)
+) {
+    val hasConfiguredAnswer: Boolean
+        get() = if (type == QuestionType.FILL_BLANK) {
+            fillBlankAnswer.isNotBlank() || acceptedAnswers.any { it.isNotBlank() }
+        } else {
+            options.isNotEmpty() && correctAnswerIndex in options.indices
+        }
+}
 
 data class AnswerFeedback(
     val isCorrect: Boolean,
@@ -50,7 +58,8 @@ data class AnswerFeedback(
     val pointsEarned: Int,
     val explanation: String?,
     val userTextAnswer: String? = null,
-    val correctTextAnswer: String? = null
+    val correctTextAnswer: String? = null,
+    val isAnswerNotSet: Boolean = false
 )
 
 class QuizEngine(
@@ -96,14 +105,24 @@ class QuizEngine(
 
         questions = rawQuestions.map { q ->
             if (q.type == QuestionType.FILL_BLANK) {
+                val cleanedAccepted = q.acceptedAnswers.filter { it.isNotBlank() }
+                val primaryAnswer = q.fillBlankAnswer.trim().ifEmpty { cleanedAccepted.firstOrNull() ?: "" }
+                val allAccepted = if (cleanedAccepted.isNotEmpty()) {
+                    cleanedAccepted
+                } else if (primaryAnswer.isNotEmpty()) {
+                    listOf(primaryAnswer)
+                } else {
+                    emptyList()
+                }
+
                 ActiveQuestion(
                     id = q.id,
                     type = QuestionType.FILL_BLANK,
                     questionText = q.question,
                     options = emptyList(),
                     correctAnswerIndex = -1,
-                    fillBlankAnswer = q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" },
-                    acceptedAnswers = if (q.acceptedAnswers.isNotEmpty()) q.acceptedAnswers else listOf(q.fillBlankAnswer),
+                    fillBlankAnswer = primaryAnswer,
+                    acceptedAnswers = allAccepted,
                     points = q.points,
                     explanation = q.explanation
                 )
@@ -333,12 +352,34 @@ class QuizEngine(
         }
 
         val trimmed = answerText.trim()
+        userTextAnswers[qIndex] = trimmed
+        lockedState[qIndex] = true
+
+        if (!q.hasConfiguredAnswer) {
+            // Empty answer in fill_blank: show "Answer not available" instead of judging it
+            questionStates[qIndex] = QuestionAnswerState(
+                isAnswered = true,
+                selectedOptionIndex = null,
+                userTextAnswer = trimmed,
+                answerState = AnswerState.ANSWER_NOT_SET,
+                isLocked = true
+            )
+            return AnswerFeedback(
+                isCorrect = false,
+                selectedOptionIndex = -1,
+                correctOptionIndex = -1,
+                streak = streak,
+                pointsEarned = 0,
+                explanation = q.explanation,
+                userTextAnswer = trimmed,
+                correctTextAnswer = "Answer not available",
+                isAnswerNotSet = true
+            )
+        }
+
         val isCorrect = AnswerComparison.isAnswerCorrect(trimmed, q.acceptedAnswers)
         val answerState = if (isCorrect) AnswerState.CORRECT else AnswerState.INCORRECT
         val pointsEarned = if (isCorrect) q.points else 0
-
-        userTextAnswers[qIndex] = trimmed
-        lockedState[qIndex] = true
 
         questionStates[qIndex] = QuestionAnswerState(
             isAnswered = true,
@@ -363,7 +404,8 @@ class QuizEngine(
             pointsEarned = pointsEarned,
             explanation = q.explanation,
             userTextAnswer = trimmed,
-            correctTextAnswer = q.fillBlankAnswer
+            correctTextAnswer = q.fillBlankAnswer,
+            isAnswerNotSet = false
         )
     }
 
@@ -432,25 +474,45 @@ class QuizEngine(
             val correctAnswerText: String
             val userSelected = selectedAnswers[index]
 
+            val isAnswerNotSet = (q.type == QuestionType.FILL_BLANK && !q.hasConfiguredAnswer)
+
             if (q.type == QuestionType.FILL_BLANK) {
                 val userText = userTextAnswers[index]?.trim()
-                isAnswered = !userText.isNullOrEmpty()
-                isCorrect = isAnswered && AnswerComparison.isAnswerCorrect(userText!!, q.acceptedAnswers)
-                userAnswerText = if (isAnswered) userText else null
-                correctAnswerText = q.fillBlankAnswer
+                val isAnsweredByUser = !userText.isNullOrEmpty()
 
-                // Reveal question state
-                questionStates[index] = QuestionAnswerState(
-                    isAnswered = isAnswered,
-                    selectedOptionIndex = null,
-                    userTextAnswer = userText,
-                    answerState = when {
-                        !isAnswered -> AnswerState.UNANSWERED
-                        isCorrect -> AnswerState.CORRECT
-                        else -> AnswerState.INCORRECT
-                    },
-                    isLocked = true
-                )
+                if (isAnswerNotSet) {
+                    // Empty answer in fill_blank: treat as unanswered during scoring
+                    isAnswered = isAnsweredByUser
+                    isCorrect = false
+                    userAnswerText = if (isAnsweredByUser) userText else null
+                    correctAnswerText = "Answer not available"
+
+                    questionStates[index] = QuestionAnswerState(
+                        isAnswered = isAnsweredByUser,
+                        selectedOptionIndex = null,
+                        userTextAnswer = userText,
+                        answerState = AnswerState.ANSWER_NOT_SET,
+                        isLocked = true
+                    )
+                } else {
+                    isAnswered = isAnsweredByUser
+                    isCorrect = isAnswered && AnswerComparison.isAnswerCorrect(userText!!, q.acceptedAnswers)
+                    userAnswerText = if (isAnswered) userText else null
+                    correctAnswerText = q.fillBlankAnswer
+
+                    // Reveal question state
+                    questionStates[index] = QuestionAnswerState(
+                        isAnswered = isAnswered,
+                        selectedOptionIndex = null,
+                        userTextAnswer = userText,
+                        answerState = when {
+                            !isAnswered -> AnswerState.UNANSWERED
+                            isCorrect -> AnswerState.CORRECT
+                            else -> AnswerState.INCORRECT
+                        },
+                        isLocked = true
+                    )
+                }
             } else {
                 isAnswered = userSelected != null
                 isCorrect = isAnswered && userSelected == q.correctAnswerIndex
@@ -474,7 +536,7 @@ class QuizEngine(
             val pointsEarned = if (isCorrect) q.points else 0
             calculatedScore += pointsEarned
 
-            if (!isAnswered) {
+            if (isAnswerNotSet || !isAnswered) {
                 unansweredCount++
             } else if (isCorrect) {
                 correctCount++
@@ -495,7 +557,8 @@ class QuizEngine(
                 maxPoints = q.points,
                 explanation = q.explanation,
                 questionType = q.type,
-                acceptedAnswers = q.acceptedAnswers
+                acceptedAnswers = q.acceptedAnswers,
+                isAnswerNotSet = isAnswerNotSet
             )
         }
 

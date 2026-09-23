@@ -442,8 +442,10 @@ fun ImportQuizScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             val fileLabel = if (importedFileName != null) "$importedFileName • " else ""
+                            val unconfiguredCount = validatedSchema?.questions?.count { !it.isAnswerConfigured } ?: 0
+                            val unconfiguredNote = if (unconfiguredCount > 0) " • $unconfiguredCount without set answer" else ""
                             Text(
-                                text = "$fileLabel${validatedSchema?.questions?.size} questions • Category: ${validatedSchema?.category}",
+                                text = "$fileLabel${validatedSchema?.questions?.size} questions • Category: ${validatedSchema?.category}$unconfiguredNote",
                                 color = Color(0xFF6EE7B7),
                                 fontSize = 12.sp
                             )

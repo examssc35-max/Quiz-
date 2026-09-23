@@ -18,7 +18,8 @@ data class QuestionReviewItem(
     val maxPoints: Int,
     val explanation: String?,
     val questionType: QuestionType = QuestionType.MCQ,
-    val acceptedAnswers: List<String> = emptyList()
+    val acceptedAnswers: List<String> = emptyList(),
+    val isAnswerNotSet: Boolean = false
 )
 
 data class QuizResultSummary(

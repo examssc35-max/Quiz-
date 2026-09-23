@@ -130,6 +130,8 @@ fun ReviewQuestionCard(
         item.userAnswerIndex == null
     }
 
+    val isAnswerNotSet = item.isAnswerNotSet || (item.questionType == QuestionType.FILL_BLANK && item.acceptedAnswers.isEmpty() && (item.correctAnswerText.isEmpty() || item.correctAnswerText == "Answer not available"))
+
     GlassCard(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -173,6 +175,12 @@ fun ReviewQuestionCard(
                 }
 
                 val (badgeBg, badgeBorder, badgeText, badgeColor) = when {
+                    isAnswerNotSet -> Quadruple(
+                        Color(0x2538BDF8),
+                        Color(0x5038BDF8),
+                        "Unanswered/Answer Not Set",
+                        Color(0xFFBAE6FD)
+                    )
                     item.isCorrect -> Quadruple(
                         CorrectGreenBg,
                         CorrectGreenBorder,
@@ -226,6 +234,7 @@ fun ReviewQuestionCard(
                 // User's typed answer
                 val userText = item.userAnswerText?.trim()
                 val (userBg, userBorder, userIconTint) = when {
+                    isAnswerNotSet -> Triple(Color(0x1838BDF8), Color(0x3538BDF8), AccentCyan)
                     item.isCorrect -> Triple(CorrectGreenBg, CorrectGreenBorder, CorrectGreen)
                     isSkipped -> Triple(Color(0x18FFFFFF), Color(0x25FFFFFF), TextMuted)
                     else -> Triple(WrongRedBg, WrongRedBorder, WrongRed)
@@ -245,6 +254,7 @@ fun ReviewQuestionCard(
                     ) {
                         Icon(
                             imageVector = when {
+                                isAnswerNotSet -> Icons.Default.Info
                                 item.isCorrect -> Icons.Default.Check
                                 isSkipped -> Icons.Default.Edit
                                 else -> Icons.Default.Close
@@ -271,8 +281,37 @@ fun ReviewQuestionCard(
                     }
                 }
 
-                // If incorrect or skipped, display the correct answer
-                if (!item.isCorrect) {
+                // If answer is not configured, show "Answer not available"
+                if (isAnswerNotSet) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0x1838BDF8))
+                            .border(1.dp, Color(0x3538BDF8), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Answer not available (Not judged)",
+                                color = Color(0xFFBAE6FD),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                } else if (!item.isCorrect) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(
                         modifier = Modifier
