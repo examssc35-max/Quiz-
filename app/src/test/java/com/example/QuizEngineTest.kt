@@ -885,5 +885,166 @@ class QuizEngineTest {
         val result = QuizJsonParser.validateAndParse(invalidMcqJson)
         assertTrue("MCQ with out-of-bounds answer must fail validation", result.isFailure)
     }
+
+    @Test
+    fun testFillBlank_singleAnswer_matchingAndPractice() {
+        val json = """
+            {
+              "title": "Single Answer Quiz",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Air pollution is a ______ to human health.",
+                  "answer": "threat",
+                  "points": 3
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parseResult = QuizJsonParser.validateAndParse(json)
+        assertTrue(parseResult.isSuccess)
+        val schema = parseResult.getOrThrow()
+        assertEquals("threat", schema.questions[0].fillBlankAnswer)
+        assertEquals(listOf("threat"), schema.questions[0].acceptedAnswers)
+
+        // Test exact match
+        var engine = QuizEngine("single_q", schema, QuizMode.PRACTICE)
+        var feedback = engine.submitTextAnswer("threat")
+        assertNotNull(feedback)
+        assertTrue("Exact match 'threat' should be correct", feedback!!.isCorrect)
+        assertEquals(3, engine.score)
+        assertEquals(1, engine.streak)
+
+        // Test case insensitivity (English)
+        engine = QuizEngine("single_q2", schema, QuizMode.PRACTICE)
+        feedback = engine.submitTextAnswer("THREAT")
+        assertNotNull(feedback)
+        assertTrue("Uppercase 'THREAT' should be accepted as correct", feedback!!.isCorrect)
+
+        // Test whitespace handling (leading/trailing and multiple spaces)
+        engine = QuizEngine("single_q3", schema, QuizMode.PRACTICE)
+        feedback = engine.submitTextAnswer("   threat   ")
+        assertNotNull(feedback)
+        assertTrue("Padded '  threat  ' should be accepted as correct", feedback!!.isCorrect)
+
+        // Test wrong answer
+        engine = QuizEngine("single_q4", schema, QuizMode.PRACTICE)
+        feedback = engine.submitTextAnswer("danger")
+        assertNotNull(feedback)
+        assertFalse("'danger' should be marked wrong when only 'threat' is accepted", feedback!!.isCorrect)
+        assertEquals(0, engine.score)
+        assertEquals(0, engine.streak)
+    }
+
+    @Test
+    fun testFillBlank_multipleAcceptedAnswers_threatAndDanger() {
+        val json = """
+            {
+              "title": "Multiple Accepted Answers Quiz",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Pollution is a serious ______.",
+                  "answer": ["threat", "danger"],
+                  "points": 2
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parseResult = QuizJsonParser.validateAndParse(json)
+        assertTrue(parseResult.isSuccess)
+        val schema = parseResult.getOrThrow()
+        assertEquals(listOf("threat", "danger"), schema.questions[0].acceptedAnswers)
+
+        // User: "threat" -> Correct
+        var engine = QuizEngine("m_test1", schema, QuizMode.PRACTICE)
+        var feedback = engine.submitTextAnswer("threat")
+        assertNotNull(feedback)
+        assertTrue("User 'threat' must be correct", feedback!!.isCorrect)
+        assertEquals(2, engine.score)
+
+        // User: "danger" -> Correct
+        engine = QuizEngine("m_test2", schema, QuizMode.PRACTICE)
+        feedback = engine.submitTextAnswer("danger")
+        assertNotNull(feedback)
+        assertTrue("User 'danger' must be correct", feedback!!.isCorrect)
+        assertEquals(2, engine.score)
+
+        // User: "pollution" -> Wrong
+        engine = QuizEngine("m_test3", schema, QuizMode.PRACTICE)
+        feedback = engine.submitTextAnswer("pollution")
+        assertNotNull(feedback)
+        assertFalse("User 'pollution' must be wrong", feedback!!.isCorrect)
+        assertEquals(0, engine.score)
+    }
+
+    @Test
+    fun testFillBlank_multipleAcceptedAnswers_plantGrowCultivate() {
+        val json = """
+            {
+              "title": "Three Answers Quiz",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "Farmers ______ crops in spring.",
+                  "answer": ["plant", "grow", "cultivate"],
+                  "points": 4
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+
+        // User: "grow" -> Correct
+        val engine = QuizEngine("three_answers", schema, QuizMode.PRACTICE)
+        val feedback = engine.submitTextAnswer("grow")
+        assertNotNull(feedback)
+        assertTrue("User 'grow' must match accepted answers ['plant', 'grow', 'cultivate']", feedback!!.isCorrect)
+        assertEquals(4, engine.score)
+    }
+
+    @Test
+    fun testFillBlank_bengaliAcceptedAnswers() {
+        val json = """
+            {
+              "title": "বাংলা কুইজ",
+              "questions": [
+                {
+                  "id": "q1",
+                  "type": "fill_blank",
+                  "question": "পৃথিবীর একমাত্র উপগ্রহের নাম ______।",
+                  "answer": ["চাঁদ", "চন্দ্র"],
+                  "points": 1
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+
+        // "চাঁদ" -> Correct
+        var engine = QuizEngine("bn1", schema, QuizMode.PRACTICE)
+        var feedback = engine.submitTextAnswer("চাঁদ")
+        assertNotNull(feedback)
+        assertTrue(feedback!!.isCorrect)
+
+        // "  চন্দ্র  " -> Correct
+        engine = QuizEngine("bn2", schema, QuizMode.PRACTICE)
+        feedback = engine.submitTextAnswer("  চন্দ্র  ")
+        assertNotNull(feedback)
+        assertTrue(feedback!!.isCorrect)
+
+        // "সূর্য" -> Wrong
+        engine = QuizEngine("bn3", schema, QuizMode.PRACTICE)
+        feedback = engine.submitTextAnswer("সূর্য")
+        assertNotNull(feedback)
+        assertFalse(feedback!!.isCorrect)
+    }
 }
 

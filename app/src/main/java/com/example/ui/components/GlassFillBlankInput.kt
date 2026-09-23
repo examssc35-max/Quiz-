@@ -63,6 +63,7 @@ fun GlassFillBlankInput(
     answerState: AnswerState,
     isLocked: Boolean,
     correctAnswerText: String,
+    acceptedAnswers: List<String> = emptyList(),
     hasConfiguredAnswer: Boolean = true,
     onSubmit: () -> Unit,
     isBengali: Boolean,
@@ -291,7 +292,15 @@ fun GlassFillBlankInput(
         }
 
         // Practice Mode: When answered & incorrect, show the correct answer immediately
-        if (isPractice && isIncorrect && correctAnswerText.isNotBlank()) {
+        val displayAnswers = if (acceptedAnswers.isNotEmpty()) {
+            acceptedAnswers
+        } else if (correctAnswerText.isNotBlank()) {
+            listOf(correctAnswerText)
+        } else {
+            emptyList()
+        }
+
+        if (isPractice && isIncorrect && displayAnswers.isNotEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -323,15 +332,21 @@ fun GlassFillBlankInput(
                     Spacer(modifier = Modifier.width(12.dp))
 
                     Column {
+                        val headerText = if (displayAnswers.size > 1) {
+                            if (isBengali) "গ্রহণযোগ্য উত্তর:" else "Accepted Answers:"
+                        } else {
+                            if (isBengali) "সঠিক উত্তর:" else "Correct Answer:"
+                        }
+
                         Text(
-                            text = if (isBengali) "সঠিক উত্তর:" else "Correct Answer:",
+                            text = headerText,
                             color = Color(0xFF6EE7B7),
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = correctAnswerText,
+                            text = displayAnswers.joinToString(", "),
                             color = TextPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold

@@ -333,26 +333,19 @@ fun ReviewQuestionCard(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
+                                val hasMultiple = item.acceptedAnswers.size > 1
                                 Text(
-                                    text = "Correct Answer:",
+                                    text = if (hasMultiple) "Accepted Answers:" else "Correct Answer:",
                                     color = Color(0xFF6EE7B7),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = item.correctAnswerText,
+                                    text = if (hasMultiple) item.acceptedAnswers.joinToString(", ") else item.correctAnswerText,
                                     color = TextPrimary,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
-                                if (item.acceptedAnswers.size > 1) {
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Accepted variations: ${item.acceptedAnswers.joinToString(", ")}",
-                                        color = TextMuted,
-                                        fontSize = 11.sp
-                                    )
-                                }
                             }
                         }
                     }

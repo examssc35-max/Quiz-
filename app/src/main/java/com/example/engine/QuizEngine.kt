@@ -107,12 +107,14 @@ class QuizEngine(
             if (q.type == QuestionType.FILL_BLANK) {
                 val cleanedAccepted = q.acceptedAnswers.filter { it.isNotBlank() }
                 val primaryAnswer = q.fillBlankAnswer.trim().ifEmpty { cleanedAccepted.firstOrNull() ?: "" }
-                val allAccepted = if (cleanedAccepted.isNotEmpty()) {
-                    cleanedAccepted
-                } else if (primaryAnswer.isNotEmpty()) {
-                    listOf(primaryAnswer)
-                } else {
-                    emptyList()
+                val allAccepted = mutableListOf<String>()
+                if (primaryAnswer.isNotEmpty()) {
+                    allAccepted.add(primaryAnswer)
+                }
+                for (item in cleanedAccepted) {
+                    if (item !in allAccepted) {
+                        allAccepted.add(item)
+                    }
                 }
 
                 ActiveQuestion(
@@ -498,7 +500,7 @@ class QuizEngine(
                     isAnswered = isAnsweredByUser
                     isCorrect = isAnswered && AnswerComparison.isAnswerCorrect(userText!!, q.acceptedAnswers)
                     userAnswerText = if (isAnswered) userText else null
-                    correctAnswerText = q.fillBlankAnswer
+                    correctAnswerText = q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" }
 
                     // Reveal question state
                     questionStates[index] = QuestionAnswerState(

@@ -289,6 +289,7 @@ fun QuizPlayScreen(
                             answerState = qState.answerState,
                             isLocked = if (engine.mode == QuizMode.PRACTICE) qState.isLocked else false,
                             correctAnswerText = currentQ.fillBlankAnswer,
+                            acceptedAnswers = currentQ.acceptedAnswers,
                             hasConfiguredAnswer = currentQ.hasConfiguredAnswer,
                             onSubmit = {
                                 if (engine.mode == QuizMode.PRACTICE) {
