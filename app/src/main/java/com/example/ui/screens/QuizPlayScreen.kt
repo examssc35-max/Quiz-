@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import com.example.audio.AppSoundManager
 import com.example.data.model.QuizMode
 import com.example.data.model.QuizResultSummary
+import com.example.engine.AnswerState
 import com.example.engine.QuizEngine
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassConfirmDialog
@@ -266,34 +267,45 @@ fun QuizPlayScreen(
                     Spacer(modifier = Modifier.height(20.dp))
 
                     // Options A, B, C, D
+                    val qState = engine.getQuestionState(currentQIndex)
+
                     currentQ.options.forEachIndexed { optIndex, optText ->
                         val letter = ('A' + optIndex).toString()
-                        val userSelected = engine.selectedAnswers[currentQIndex]
 
-                        val visualState: OptionVisualState = if (engine.mode == QuizMode.PRACTICE) {
-                            if (isLocked) {
+                        val (visualState, statusText) = if (engine.mode == QuizMode.PRACTICE) {
+                            if (qState.isAnswered) {
                                 when {
-                                    optIndex == currentQ.correctAnswerIndex -> OptionVisualState.CORRECT_GREEN
-                                    userSelected != null && optIndex == userSelected -> OptionVisualState.WRONG_RED
-                                    else -> OptionVisualState.DEFAULT
+                                    qState.answerState == AnswerState.CORRECT && optIndex == currentQ.correctAnswerIndex -> {
+                                        Pair(OptionVisualState.CORRECT_GREEN, if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct")
+                                    }
+                                    qState.answerState == AnswerState.INCORRECT && optIndex == qState.selectedOptionIndex -> {
+                                        Pair(OptionVisualState.WRONG_RED, if (isBengali) "✕ ভুল উত্তর" else "✕ Incorrect")
+                                    }
+                                    qState.answerState == AnswerState.INCORRECT && optIndex == currentQ.correctAnswerIndex -> {
+                                        Pair(OptionVisualState.CORRECT_GREEN, if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct")
+                                    }
+                                    else -> Pair(OptionVisualState.DEFAULT, null)
                                 }
                             } else {
-                                OptionVisualState.DEFAULT
+                                Pair(OptionVisualState.DEFAULT, null)
                             }
                         } else {
-                            // Exam Mode: editable blue active state, no spoilers
-                            if (userSelected != null && userSelected == optIndex) OptionVisualState.SELECTED_BLUE
-                            else OptionVisualState.DEFAULT
+                            // Exam Mode: editable blue active state, no spoilers, no green/red
+                            if (qState.selectedOptionIndex == optIndex) {
+                                Pair(OptionVisualState.SELECTED_BLUE, if (isBengali) "✓ নির্বাচিত" else "✓ Selected")
+                            } else {
+                                Pair(OptionVisualState.DEFAULT, null)
+                            }
                         }
 
                         GlassOption(
                             letter = letter,
                             text = optText,
                             state = visualState,
-                            enabled = if (engine.mode == QuizMode.PRACTICE) !isLocked else true,
+                            statusText = statusText,
+                            enabled = if (engine.mode == QuizMode.PRACTICE) !qState.isLocked else true,
                             onClick = {
                                 val feedback = engine.selectOption(optIndex)
-                                answersVersion++
 
                                 if (engine.mode == QuizMode.PRACTICE && feedback != null) {
                                     if (feedback.isCorrect) {
@@ -309,7 +321,7 @@ fun QuizPlayScreen(
                                         voiceEnabled = voiceEnabled,
                                         isBengaliQuiz = isBengali
                                     )
-                                } else {
+                                } else if (engine.mode == QuizMode.EXAM) {
                                     soundManager.playClickSound(soundEnabled)
                                 }
                             }
@@ -319,9 +331,8 @@ fun QuizPlayScreen(
                     }
 
                     // Practice Mode Feedback Pill & Explanation Card
-                    if (engine.mode == QuizMode.PRACTICE && isLocked) {
-                        val userSelected = engine.selectedAnswers[currentQIndex]
-                        val isCorrect = userSelected == currentQ.correctAnswerIndex
+                    if (engine.mode == QuizMode.PRACTICE && qState.isAnswered) {
+                        val isCorrect = qState.answerState == AnswerState.CORRECT
 
                         Spacer(modifier = Modifier.height(8.dp))
 
@@ -558,13 +569,17 @@ fun QuizPlayScreen(
                                     .background(
                                         when {
                                             isCurrent -> AccentBluePrimary
-                                            isQAnswered -> Color(0xFF10B981).copy(alpha = 0.4f)
+                                            isQAnswered -> Color(0xFF2563EB).copy(alpha = 0.5f)
                                             else -> Color(0x25FFFFFF)
                                         }
                                     )
                                     .border(
                                         if (isCurrent) 2.dp else 1.dp,
-                                        if (isCurrent) Color.White else Color(0x35FFFFFF),
+                                        when {
+                                            isCurrent -> Color.White
+                                            isQAnswered -> Color(0xFF60A5FA).copy(alpha = 0.7f)
+                                            else -> Color(0x35FFFFFF)
+                                        },
                                         CircleShape
                                     )
                                     .clickable {

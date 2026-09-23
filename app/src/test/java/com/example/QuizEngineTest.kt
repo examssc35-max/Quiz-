@@ -173,4 +173,406 @@ class QuizEngineTest {
         assertEquals(1, summary.unansweredCount)
         assertEquals(50f, summary.accuracy, 0.01f)
     }
+
+    @Test
+    fun testOpenJsonDocumentContract_configuresIntentProperly() {
+        val contract = com.example.ui.screens.OpenJsonDocumentContract()
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val intent = contract.createIntent(context, Unit)
+
+        assertEquals(android.content.Intent.ACTION_OPEN_DOCUMENT, intent.action)
+        assertTrue("Must include CATEGORY_OPENABLE", intent.hasCategory(android.content.Intent.CATEGORY_OPENABLE))
+        assertEquals("*/*", intent.type)
+
+        val mimeTypes = intent.getStringArrayExtra(android.content.Intent.EXTRA_MIME_TYPES)
+        assertNotNull(mimeTypes)
+        assertTrue(mimeTypes!!.contains("application/json"))
+        assertTrue(mimeTypes.contains("text/json"))
+        assertTrue(mimeTypes.contains("text/plain"))
+        assertTrue(mimeTypes.contains("application/octet-stream"))
+        assertTrue(mimeTypes.contains("*/*"))
+    }
+
+    @Test
+    fun testBanglaJson_fileParsingAndEngineExecution() {
+        val file = java.io.File("/MT2/bangla.json")
+        val jsonContent = if (file.exists()) {
+            file.readText(Charsets.UTF_8)
+        } else {
+            QuizJsonParser.toJsonString(SampleQuizzes.BENGALI_QUIZ)
+        }
+
+        // Validate parsing
+        val parseResult = QuizJsonParser.validateAndParse(jsonContent)
+        assertTrue(parseResult.isSuccess)
+
+        val quizSchema = parseResult.getOrThrow()
+        assertEquals("বাংলাদেশ ও সাধারণ জ্ঞান", quizSchema.title)
+        assertTrue(quizSchema.questions.isNotEmpty())
+
+        // Verify Practice Mode
+        val practiceEngine = QuizEngine("bangla_practice", quizSchema, QuizMode.PRACTICE)
+        assertEquals(quizSchema.questions.size, practiceEngine.questions.size)
+        val firstQ = practiceEngine.currentQuestion
+        assertNotNull(firstQ)
+        val feedback = practiceEngine.selectOption(firstQ!!.correctAnswerIndex)
+        assertNotNull(feedback)
+        assertTrue(feedback!!.isCorrect)
+
+        // Verify Exam Mode
+        val examEngine = QuizEngine("bangla_exam", quizSchema, QuizMode.EXAM)
+        val examQ = examEngine.currentQuestion
+        assertNotNull(examQ)
+        examEngine.selectOption(examQ!!.correctAnswerIndex)
+        val examSummary = examEngine.submitExam()
+        assertTrue(examSummary.correctCount >= 1)
+        assertTrue(examSummary.score > 0)
+    }
+
+    @Test
+    fun testFileExtensionValidation_caseInsensitive() {
+        val validFileNames = listOf("quiz.json", "BANGLA.JSON", "test.Json", "questions.jSoN")
+        val invalidFileNames = listOf("quiz.txt", "document.pdf", "image.png", "notes.doc")
+
+        for (name in validFileNames) {
+            assertTrue("Expected $name to be valid", name.endsWith(".json", ignoreCase = true))
+        }
+
+        for (name in invalidFileNames) {
+            assertFalse("Expected $name to be invalid", name.endsWith(".json", ignoreCase = true))
+        }
+    }
+
+    // =========================================================================
+    // SECTION 21: SPECIFIC TEST CASES FROM SPECIFICATION
+    // =========================================================================
+
+    @Test
+    fun testScenario1_PracticeCorrect_ImmediateLockAndScore() {
+        val schema = QuizSchema(
+            title = "Test 1 Practice Correct",
+            description = "",
+            category = "General",
+            difficulty = "Easy",
+            timeLimit = 0,
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    question = "Capital of France?",
+                    options = listOf("London", "Berlin", "Paris", "Rome"),
+                    answer = 2, // Paris
+                    points = 5,
+                    explanation = "Paris is the capital"
+                )
+            )
+        )
+
+        val engine = QuizEngine("test_1", schema, QuizMode.PRACTICE)
+        assertEquals(0, engine.score)
+        val initialQState = engine.getQuestionState(0)
+        assertEquals(com.example.engine.AnswerState.UNANSWERED, initialQState.answerState)
+        assertFalse(initialQState.isLocked)
+
+        // User taps correct answer C (index 2)
+        val feedback = engine.selectOption(2)
+        assertNotNull(feedback)
+        assertTrue(feedback!!.isCorrect)
+        assertEquals(5, engine.score)
+        assertEquals(1, engine.streak)
+
+        // Reactive state check
+        val updatedQState = engine.getQuestionState(0)
+        assertTrue(updatedQState.isAnswered)
+        assertTrue(updatedQState.isLocked)
+        assertEquals(2, updatedQState.selectedOptionIndex)
+        assertEquals(com.example.engine.AnswerState.CORRECT, updatedQState.answerState)
+    }
+
+    @Test
+    fun testScenario2_PracticeWrong_ImmediateLockSelectedWrongCorrectRevealedNoScore() {
+        val schema = QuizSchema(
+            title = "Test 2 Practice Wrong",
+            description = "",
+            category = "General",
+            difficulty = "Easy",
+            timeLimit = 0,
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    question = "2 + 2 = ?",
+                    options = listOf("3", "4", "5", "6"),
+                    answer = 1, // 4
+                    points = 3,
+                    explanation = "2 + 2 = 4"
+                )
+            )
+        )
+
+        val engine = QuizEngine("test_2", schema, QuizMode.PRACTICE)
+        // User taps wrong answer A (index 0)
+        val feedback = engine.selectOption(0)
+        assertNotNull(feedback)
+        assertFalse(feedback!!.isCorrect)
+        assertEquals(0, engine.score) // No points awarded
+        assertEquals(0, engine.streak) // Streak reset
+
+        val state = engine.getQuestionState(0)
+        assertTrue(state.isAnswered)
+        assertTrue(state.isLocked)
+        assertEquals(0, state.selectedOptionIndex)
+        assertEquals(com.example.engine.AnswerState.INCORRECT, state.answerState)
+        // Correct answer remains index 1
+        assertEquals(1, engine.currentQuestion!!.correctAnswerIndex)
+    }
+
+    @Test
+    fun testScenario3_RapidDoubleTap_OnlyOneScoreIncrement() {
+        val schema = QuizSchema(
+            title = "Test 3 Rapid Tap",
+            description = "",
+            category = "General",
+            difficulty = "Easy",
+            timeLimit = 0,
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    question = "Fast tap test",
+                    options = listOf("Wrong", "Right"),
+                    answer = 1,
+                    points = 10,
+                    explanation = ""
+                )
+            )
+        )
+
+        val engine = QuizEngine("test_3", schema, QuizMode.PRACTICE)
+
+        // First tap: processes and awards 10 points
+        val firstFeedback = engine.selectOption(1)
+        assertNotNull(firstFeedback)
+        assertEquals(10, engine.score)
+
+        // Rapid second and third taps
+        val secondFeedback = engine.selectOption(1)
+        val thirdFeedback = engine.selectOption(0)
+
+        // Must be null and ignored
+        assertEquals(null, secondFeedback)
+        assertEquals(null, thirdFeedback)
+        // Score MUST remain 10, never 20 or 30!
+        assertEquals(10, engine.score)
+        assertEquals(1, engine.streak)
+    }
+
+    @Test
+    fun testScenario4_ExamSelect_VisualSelectionOnlyNoScoreNoSpoiler() {
+        val schema = QuizSchema(
+            title = "Test 4 Exam Select",
+            description = "",
+            category = "Exam",
+            difficulty = "Medium",
+            timeLimit = 60,
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    question = "Q1",
+                    options = listOf("A", "B", "C", "D"),
+                    answer = 2,
+                    points = 5
+                )
+            )
+        )
+
+        val engine = QuizEngine("test_4", schema, QuizMode.EXAM)
+        // Select option B (index 1)
+        val feedback = engine.selectOption(1)
+        // In exam mode, feedback is null (no live spoiler)
+        assertEquals(null, feedback)
+        assertEquals(0, engine.score) // Score is 0 until submit
+
+        val state = engine.getQuestionState(0)
+        assertTrue(state.isAnswered)
+        assertFalse(state.isLocked) // NOT locked, can be changed
+        assertEquals(1, state.selectedOptionIndex)
+        assertEquals(com.example.engine.AnswerState.UNANSWERED, state.answerState) // State is not revealed
+    }
+
+    @Test
+    fun testScenario5_ExamChangeAnswer_SelectionUpdatesNoValidationUntilSubmit() {
+        val schema = QuizSchema(
+            title = "Test 5 Exam Change Answer",
+            description = "",
+            category = "Exam",
+            difficulty = "Medium",
+            timeLimit = 60,
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    question = "Q1",
+                    options = listOf("A", "B", "C", "D"),
+                    answer = 3, // D is correct
+                    points = 5
+                )
+            )
+        )
+
+        val engine = QuizEngine("test_5", schema, QuizMode.EXAM)
+        // Select B (index 1)
+        engine.selectOption(1)
+        assertEquals(1, engine.getQuestionState(0).selectedOptionIndex)
+
+        // Change to D (index 3)
+        engine.selectOption(3)
+        assertEquals(3, engine.getQuestionState(0).selectedOptionIndex)
+
+        // Still score 0
+        assertEquals(0, engine.score)
+
+        // Now submit
+        val summary = engine.submitExam()
+        assertEquals(5, summary.score)
+        assertEquals(1, summary.correctCount)
+        assertEquals(3, summary.reviewItems[0].userAnswerIndex)
+    }
+
+    @Test
+    fun testScenario6_ExamSubmit_AllAnswersValidatedAndRevealed() {
+        val schema = QuizSchema(
+            title = "Test 6 Exam Submit",
+            description = "",
+            category = "Exam",
+            difficulty = "Hard",
+            timeLimit = 120,
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(id = "q1", question = "Q1", options = listOf("A", "B"), answer = 0, points = 4),
+                QuestionSchema(id = "q2", question = "Q2", options = listOf("C", "D"), answer = 1, points = 6),
+                QuestionSchema(id = "q3", question = "Q3", options = listOf("E", "F"), answer = 0, points = 5)
+            )
+        )
+
+        val engine = QuizEngine("test_6", schema, QuizMode.EXAM)
+        engine.selectOption(0) // Q1 correct (A)
+        engine.nextQuestion()
+        engine.selectOption(0) // Q2 wrong (C, correct is D)
+        engine.nextQuestion()
+        // Q3 left unanswered
+
+        val summary = engine.submitExam()
+        assertEquals(4, summary.score)
+        assertEquals(15, summary.maxScore)
+        assertEquals(1, summary.correctCount)
+        assertEquals(1, summary.wrongCount)
+        assertEquals(1, summary.unansweredCount)
+
+        // Post-submit questionStates are locked and revealed
+        val stateQ1 = engine.getQuestionState(0)
+        assertEquals(com.example.engine.AnswerState.CORRECT, stateQ1.answerState)
+        assertTrue(stateQ1.isLocked)
+
+        val stateQ2 = engine.getQuestionState(1)
+        assertEquals(com.example.engine.AnswerState.INCORRECT, stateQ2.answerState)
+        assertTrue(stateQ2.isLocked)
+
+        val stateQ3 = engine.getQuestionState(2)
+        assertEquals(com.example.engine.AnswerState.UNANSWERED, stateQ3.answerState)
+        assertTrue(stateQ3.isLocked)
+    }
+
+    @Test
+    fun testScenario7_ShuffledOptions_PreservesCorrectAnswerMapping() {
+        val schema = QuizSchema(
+            title = "Test 7 Shuffled Options",
+            description = "",
+            category = "Test",
+            difficulty = "Easy",
+            timeLimit = 0,
+            shuffleQuestions = true,
+            shuffleOptions = true,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    question = "Capital of Japan?",
+                    options = listOf("Kyoto", "Osaka", "Tokyo", "Hiroshima"),
+                    answer = 2, // "Tokyo"
+                    points = 5
+                ),
+                QuestionSchema(
+                    id = "q2",
+                    question = "Largest planet?",
+                    options = listOf("Earth", "Mars", "Jupiter", "Venus", "Saturn"),
+                    answer = 2, // "Jupiter"
+                    points = 5
+                )
+            )
+        )
+
+        repeat(30) {
+            val engine = QuizEngine("shuffle_test", schema, QuizMode.PRACTICE)
+            for (q in engine.questions) {
+                val correctText = q.options[q.correctAnswerIndex]
+                if (q.id == "q1") {
+                    assertEquals("Tokyo", correctText)
+                } else if (q.id == "q2") {
+                    assertEquals("Jupiter", correctText)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testScenario8_Navigation_MaintainsPreviousAnswerStateAndStartsNewUnanswered() {
+        val schema = QuizSchema(
+            title = "Test 8 Navigation",
+            description = "",
+            category = "Test",
+            difficulty = "Easy",
+            timeLimit = 0,
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(id = "q1", question = "Q1", options = listOf("A", "B"), answer = 1, points = 2),
+                QuestionSchema(id = "q2", question = "Q2", options = listOf("C", "D"), answer = 0, points = 3)
+            )
+        )
+
+        val engine = QuizEngine("test_8", schema, QuizMode.PRACTICE)
+        // Answer Q1 correctly
+        engine.selectOption(1)
+        assertTrue(engine.getQuestionState(0).isAnswered)
+        assertEquals(com.example.engine.AnswerState.CORRECT, engine.getQuestionState(0).answerState)
+
+        // Move to Q2
+        assertTrue(engine.nextQuestion())
+        assertEquals(1, engine.currentQuestionIndex)
+
+        // Q2 must start clean and UNANSWERED
+        val q2State = engine.getQuestionState(1)
+        assertFalse(q2State.isAnswered)
+        assertFalse(q2State.isLocked)
+        assertEquals(com.example.engine.AnswerState.UNANSWERED, q2State.answerState)
+
+        // Navigate back to Q1
+        assertTrue(engine.previousQuestion())
+        assertEquals(0, engine.currentQuestionIndex)
+
+        // Q1 state must still be intact: answered, locked, correct
+        val restoredQ1State = engine.getQuestionState(0)
+        assertTrue(restoredQ1State.isAnswered)
+        assertTrue(restoredQ1State.isLocked)
+        assertEquals(1, restoredQ1State.selectedOptionIndex)
+        assertEquals(com.example.engine.AnswerState.CORRECT, restoredQ1State.answerState)
+    }
 }
+

@@ -1,5 +1,10 @@
 package com.example.engine
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.example.data.local.entity.UnfinishedQuizEntity
 import com.example.data.model.QuestionReviewItem
 import com.example.data.model.QuestionSchema
@@ -8,6 +13,19 @@ import com.example.data.model.QuizResultSummary
 import com.example.data.model.QuizSchema
 import org.json.JSONArray
 import org.json.JSONObject
+
+enum class AnswerState {
+    UNANSWERED,
+    CORRECT,
+    INCORRECT
+}
+
+data class QuestionAnswerState(
+    val isAnswered: Boolean = false,
+    val selectedOptionIndex: Int? = null,
+    val answerState: AnswerState = AnswerState.UNANSWERED,
+    val isLocked: Boolean = false
+)
 
 data class ActiveQuestion(
     val id: String,
@@ -35,31 +53,32 @@ class QuizEngine(
     val questions: List<ActiveQuestion>
     val totalQuestions: Int
 
-    var currentQuestionIndex: Int = 0
+    // Reactive Compose state for question answer states (single source of truth for UI)
+    val questionStates = mutableStateMapOf<Int, QuestionAnswerState>()
+
+    var currentQuestionIndex: Int by mutableIntStateOf(0)
         private set
 
-    // questionIndex -> selectedOptionIndex
+    // Backwards-compatible raw maps for serialization & review
     val selectedAnswers = mutableMapOf<Int, Int>()
-
-    // questionIndex -> locked state (in Practice Mode)
     val lockedState = mutableMapOf<Int, Boolean>()
 
-    var score: Int = 0
+    var score: Int by mutableIntStateOf(0)
         private set
 
-    var streak: Int = 0
+    var streak: Int by mutableIntStateOf(0)
         private set
 
-    var timeRemainingSeconds: Int = quizSchema.timeLimit
+    var timeRemainingSeconds: Int by mutableIntStateOf(quizSchema.timeLimit)
         private set
 
-    var isExamSubmitted: Boolean = false
+    var isExamSubmitted: Boolean by mutableStateOf(false)
         private set
 
     val totalPossibleScore: Int
 
     init {
-        // Prepare questions with rock-solid shuffling logic
+        // Prepare questions with stable shuffle indexing
         val rawQuestions = if (quizSchema.shuffleQuestions) {
             quizSchema.questions.shuffled()
         } else {
@@ -67,13 +86,15 @@ class QuizEngine(
         }
 
         questions = rawQuestions.map { q ->
-            val correctOptionText = q.options[q.answer]
-            val finalOptions = if (quizSchema.shuffleOptions) {
-                q.options.shuffled()
+            val indexedOptions = q.options.mapIndexed { index, text -> index to text }
+            val finalIndexedOptions = if (quizSchema.shuffleOptions) {
+                indexedOptions.shuffled()
             } else {
-                q.options
+                indexedOptions
             }
-            val finalCorrectIndex = finalOptions.indexOf(correctOptionText)
+            val finalOptions = finalIndexedOptions.map { it.second }
+            // Stable mapping: correct option is wherever original index matches q.answer
+            val finalCorrectIndex = finalIndexedOptions.indexOfFirst { it.first == q.answer }
 
             ActiveQuestion(
                 id = q.id,
@@ -87,6 +108,11 @@ class QuizEngine(
 
         totalQuestions = questions.size
         totalPossibleScore = questions.sumOf { it.points }
+
+        // Initialize question states for every question
+        for (i in 0 until totalQuestions) {
+            questionStates[i] = QuestionAnswerState()
+        }
     }
 
     // Constructor to resume an unfinished quiz
@@ -130,6 +156,28 @@ class QuizEngine(
                     lockedState[qIdx] = lockedObj.getBoolean(k)
                 }
             }
+
+            // Populate reactive questionStates from restored data
+            for (i in 0 until totalQuestions) {
+                val userSelected = selectedAnswers[i]
+                val isLocked = lockedState[i] == true
+                val q = questions.getOrNull(i)
+                val isCorrect = (userSelected != null && q != null && userSelected == q.correctAnswerIndex)
+
+                val answerState = when {
+                    userSelected == null -> AnswerState.UNANSWERED
+                    mode == QuizMode.EXAM -> AnswerState.UNANSWERED
+                    isCorrect -> AnswerState.CORRECT
+                    else -> AnswerState.INCORRECT
+                }
+
+                questionStates[i] = QuestionAnswerState(
+                    isAnswered = userSelected != null,
+                    selectedOptionIndex = userSelected,
+                    answerState = answerState,
+                    isLocked = isLocked
+                )
+            }
         } catch (e: Exception) {
             // Graceful fallback to default engine
         }
@@ -139,28 +187,48 @@ class QuizEngine(
         get() = questions.getOrNull(currentQuestionIndex)
 
     val isCurrentQuestionAnswered: Boolean
-        get() = selectedAnswers.containsKey(currentQuestionIndex)
+        get() = questionStates[currentQuestionIndex]?.isAnswered == true
 
     val isCurrentQuestionLocked: Boolean
-        get() = lockedState[currentQuestionIndex] == true
+        get() = questionStates[currentQuestionIndex]?.isLocked == true
+
+    fun getQuestionState(questionIndex: Int): QuestionAnswerState {
+        return questionStates[questionIndex] ?: QuestionAnswerState()
+    }
 
     /**
-     * Handles option selection.
+     * Handles option selection with atomic double-click and state safety.
      * In Practice Mode: locks question immediately, validates live, updates score & streak.
      * In Exam Mode: stores selection without validation or locking, allows changing answer.
      */
+    @Synchronized
     fun selectOption(optionIndex: Int): AnswerFeedback? {
         val q = currentQuestion ?: return null
+        val qIndex = currentQuestionIndex
 
         if (mode == QuizMode.PRACTICE) {
-            if (isCurrentQuestionLocked) return null // Already answered & locked
-
-            selectedAnswers[currentQuestionIndex] = optionIndex
-            lockedState[currentQuestionIndex] = true
+            val currentState = questionStates[qIndex]
+            if (currentState?.isLocked == true || lockedState[qIndex] == true) {
+                return null // Already answered and locked, ignore tap
+            }
 
             val isCorrect = (optionIndex == q.correctAnswerIndex)
+            val answerState = if (isCorrect) AnswerState.CORRECT else AnswerState.INCORRECT
             val pointsEarned = if (isCorrect) q.points else 0
 
+            // 1. Immediately store answer and lock state
+            selectedAnswers[qIndex] = optionIndex
+            lockedState[qIndex] = true
+
+            // 2. Update reactive state (triggers instant UI recomposition)
+            questionStates[qIndex] = QuestionAnswerState(
+                isAnswered = true,
+                selectedOptionIndex = optionIndex,
+                answerState = answerState,
+                isLocked = true
+            )
+
+            // 3. Update score and streak exactly once
             if (isCorrect) {
                 score += pointsEarned
                 streak += 1
@@ -177,8 +245,16 @@ class QuizEngine(
                 explanation = q.explanation
             )
         } else {
-            // Exam Mode: editable, no live feedback
-            selectedAnswers[currentQuestionIndex] = optionIndex
+            // Exam Mode: editable, no live feedback, no locking until submission
+            if (isExamSubmitted) return null
+
+            selectedAnswers[qIndex] = optionIndex
+            questionStates[qIndex] = QuestionAnswerState(
+                isAnswered = true,
+                selectedOptionIndex = optionIndex,
+                answerState = AnswerState.UNANSWERED,
+                isLocked = false
+            )
             return null
         }
     }
@@ -234,6 +310,18 @@ class QuizEngine(
             } else {
                 wrongCount++
             }
+
+            // Reveal question states upon exam submission
+            questionStates[index] = QuestionAnswerState(
+                isAnswered = isAnswered,
+                selectedOptionIndex = userSelected,
+                answerState = when {
+                    !isAnswered -> AnswerState.UNANSWERED
+                    isCorrect -> AnswerState.CORRECT
+                    else -> AnswerState.INCORRECT
+                },
+                isLocked = true
+            )
 
             QuestionReviewItem(
                 questionNumber = index + 1,

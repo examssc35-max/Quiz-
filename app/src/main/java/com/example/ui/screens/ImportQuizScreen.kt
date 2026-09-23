@@ -1,8 +1,13 @@
 package com.example.ui.screens
 
+import android.app.Activity
+import android.content.ContentResolver
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -71,6 +76,34 @@ import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
+/**
+ * Custom ActivityResultContract using native ACTION_OPEN_DOCUMENT with CATEGORY_OPENABLE.
+ * Configured with broad MIME types so that Android DocumentsUI / Android Files does NOT
+ * grey out .json files (e.g. from Downloads, Termux, internal storage, SD card, external file managers).
+ */
+class OpenJsonDocumentContract : ActivityResultContract<Unit, Uri?>() {
+    override fun createIntent(context: Context, input: Unit): Intent {
+        return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            // Base type */* to prevent DocumentsUI from restricting before EXTRA_MIME_TYPES is evaluated
+            type = "*/*"
+            // Support common JSON MIME types, octet-stream, text/plain, and wildcard fallback
+            val mimeTypes = arrayOf(
+                "application/json",
+                "text/json",
+                "text/plain",
+                "application/octet-stream",
+                "*/*"
+            )
+            putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+        }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+        return if (resultCode == Activity.RESULT_OK) intent?.data else null
+    }
+}
+
 @Composable
 fun ImportQuizScreen(
     onBackClick: () -> Unit,
@@ -84,29 +117,73 @@ fun ImportQuizScreen(
     var jsonText by remember { mutableStateOf("") }
     var validationError by remember { mutableStateOf<String?>(null) }
     var validatedSchema by remember { mutableStateOf<QuizSchema?>(null) }
+    var importedFileName by remember { mutableStateOf<String?>(null) }
     var showHelpDialog by remember { mutableStateOf(false) }
 
-    // File picker launcher
+    // Native ACTION_OPEN_DOCUMENT file picker launcher with broad MIME support
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = OpenJsonDocumentContract()
     ) { uri: Uri? ->
         if (uri != null) {
             try {
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    val reader = BufferedReader(InputStreamReader(stream))
-                    val content = reader.readText()
-                    jsonText = content
-                    val result = QuizJsonParser.validateAndParse(content)
-                    if (result.isSuccess) {
-                        validatedSchema = result.getOrNull()
-                        validationError = null
-                    } else {
-                        validatedSchema = null
-                        validationError = result.exceptionOrNull()?.message
+                // Preserve persistable URI permission when supported (Requirement 12)
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (ignored: Exception) {
+                    // Ignored if provider does not support persistable permissions
+                }
+
+                // Query file display name for extension validation & user feedback
+                val queriedName: String? = if (uri.scheme == ContentResolver.SCHEME_CONTENT) {
+                    try {
+                        context.contentResolver.query(
+                            uri,
+                            arrayOf(OpenableColumns.DISPLAY_NAME),
+                            null,
+                            null,
+                            null
+                        )?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                if (nameIdx >= 0) cursor.getString(nameIdx) else null
+                            } else null
+                        }
+                    } catch (ignored: Exception) {
+                        null
                     }
+                } else null
+                val resolvedFileName = queriedName ?: uri.lastPathSegment?.substringAfterLast('/')
+
+                // Validate file extension case-insensitively (.json or .JSON) (Requirement 5)
+                if (resolvedFileName != null && !resolvedFileName.endsWith(".json", ignoreCase = true)) {
+                    validationError = "Selected file '$resolvedFileName' must have a .json extension."
+                    validatedSchema = null
+                    return@rememberLauncherForActivityResult
+                }
+
+                // Read file content via ContentResolver.openInputStream(uri) with UTF-8 encoding (Requirement 7, 11)
+                val content = context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).readText()
+                } ?: throw IllegalStateException("Could not open input stream for selected file")
+
+                jsonText = content
+                importedFileName = resolvedFileName
+
+                // Parse and validate against Quiz Explore schema (Requirement 8, 9)
+                val result = QuizJsonParser.validateAndParse(content)
+                if (result.isSuccess) {
+                    validatedSchema = result.getOrNull()
+                    validationError = null
+                } else {
+                    validatedSchema = null
+                    validationError = result.exceptionOrNull()?.message ?: "Invalid Quiz JSON"
                 }
             } catch (e: Exception) {
                 validationError = "Failed to read file: ${e.message}"
+                validatedSchema = null
             }
         }
     }
@@ -141,7 +218,7 @@ fun ImportQuizScreen(
                 shape = RoundedCornerShape(24.dp),
                 backgroundColor = Color(0x301E293B),
                 borderBrush = GlassBorderBrush,
-                onClick = { filePickerLauncher.launch("application/json") }
+                onClick = { filePickerLauncher.launch(Unit) }
             ) {
                 Column(
                     modifier = Modifier
@@ -167,7 +244,7 @@ fun ImportQuizScreen(
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
-                        text = "Choose JSON File",
+                        text = if (importedFileName != null) "Selected: $importedFileName" else "Choose JSON File",
                         color = TextPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
@@ -176,8 +253,8 @@ fun ImportQuizScreen(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "Tap to browse files on your device",
-                        color = TextMuted,
+                        text = if (importedFileName != null) "Tap to choose a different JSON file" else "Tap to browse files on your device",
+                        color = if (importedFileName != null) AccentCyan else TextMuted,
                         fontSize = 13.sp
                     )
                 }
@@ -209,6 +286,7 @@ fun ImportQuizScreen(
                             jsonText = QuizJsonParser.toJsonString(sample)
                             validatedSchema = sample
                             validationError = null
+                            importedFileName = "bangla.json (Sample)"
                         }
                         .padding(4.dp)
                 )
@@ -293,6 +371,7 @@ fun ImportQuizScreen(
                                         jsonText = ""
                                         validatedSchema = null
                                         validationError = null
+                                        importedFileName = null
                                     }
                                     .padding(4.dp)
                             )
@@ -362,8 +441,9 @@ fun ImportQuizScreen(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold
                             )
+                            val fileLabel = if (importedFileName != null) "$importedFileName • " else ""
                             Text(
-                                text = "${validatedSchema?.questions?.size} questions • Category: ${validatedSchema?.category}",
+                                text = "$fileLabel${validatedSchema?.questions?.size} questions • Category: ${validatedSchema?.category}",
                                 color = Color(0xFF6EE7B7),
                                 fontSize = 12.sp
                             )
