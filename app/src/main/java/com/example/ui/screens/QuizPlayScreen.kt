@@ -54,12 +54,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.audio.AppSoundManager
+import com.example.data.model.QuestionType
 import com.example.data.model.QuizMode
 import com.example.data.model.QuizResultSummary
 import com.example.engine.AnswerState
 import com.example.engine.QuizEngine
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassConfirmDialog
+import com.example.ui.components.GlassFillBlankInput
 import com.example.ui.components.GlassOption
 import com.example.ui.components.GlassPrimaryButton
 import com.example.ui.components.GlassProgressBar
@@ -266,111 +268,156 @@ fun QuizPlayScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Options A, B, C, D
+                    // Question Content: Fill-in-the-Blank or MCQ Options
                     val qState = engine.getQuestionState(currentQIndex)
 
-                    currentQ.options.forEachIndexed { optIndex, optText ->
-                        val letter = ('A' + optIndex).toString()
-
-                        val (visualState, statusText) = if (engine.mode == QuizMode.PRACTICE) {
-                            if (qState.isAnswered) {
-                                when {
-                                    qState.answerState == AnswerState.CORRECT && optIndex == currentQ.correctAnswerIndex -> {
-                                        Pair(OptionVisualState.CORRECT_GREEN, if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct")
-                                    }
-                                    qState.answerState == AnswerState.INCORRECT && optIndex == qState.selectedOptionIndex -> {
-                                        Pair(OptionVisualState.WRONG_RED, if (isBengali) "✕ ভুল উত্তর" else "✕ Incorrect")
-                                    }
-                                    qState.answerState == AnswerState.INCORRECT && optIndex == currentQ.correctAnswerIndex -> {
-                                        Pair(OptionVisualState.CORRECT_GREEN, if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct")
-                                    }
-                                    else -> Pair(OptionVisualState.DEFAULT, null)
-                                }
-                            } else {
-                                Pair(OptionVisualState.DEFAULT, null)
-                            }
-                        } else {
-                            // Exam Mode: editable blue active state, no spoilers, no green/red
-                            if (qState.selectedOptionIndex == optIndex) {
-                                Pair(OptionVisualState.SELECTED_BLUE, if (isBengali) "✓ নির্বাচিত" else "✓ Selected")
-                            } else {
-                                Pair(OptionVisualState.DEFAULT, null)
-                            }
+                    if (currentQ.type == QuestionType.FILL_BLANK) {
+                        var typedAnswer by remember(currentQIndex, qState.userTextAnswer) {
+                            mutableStateOf(qState.userTextAnswer ?: engine.userTextAnswers[currentQIndex] ?: "")
                         }
 
-                        GlassOption(
-                            letter = letter,
-                            text = optText,
-                            state = visualState,
-                            statusText = statusText,
-                            enabled = if (engine.mode == QuizMode.PRACTICE) !qState.isLocked else true,
-                            onClick = {
-                                val feedback = engine.selectOption(optIndex)
-
-                                if (engine.mode == QuizMode.PRACTICE && feedback != null) {
-                                    if (feedback.isCorrect) {
-                                        soundManager.playCorrectSound(soundEnabled)
-                                        soundManager.vibrate(vibrationEnabled, isSuccess = true)
-                                    } else {
-                                        soundManager.playWrongSound(soundEnabled)
-                                        soundManager.vibrate(vibrationEnabled, isSuccess = false)
+                        GlassFillBlankInput(
+                            userAnswerText = typedAnswer,
+                            onAnswerChange = { newText ->
+                                typedAnswer = newText
+                                if (engine.mode == QuizMode.EXAM) {
+                                    engine.updateExamTextAnswer(newText)
+                                }
+                            },
+                            mode = engine.mode,
+                            isAnswered = qState.isAnswered,
+                            answerState = qState.answerState,
+                            isLocked = if (engine.mode == QuizMode.PRACTICE) qState.isLocked else false,
+                            correctAnswerText = currentQ.fillBlankAnswer,
+                            onSubmit = {
+                                if (engine.mode == QuizMode.PRACTICE) {
+                                    val feedback = engine.submitTextAnswer(typedAnswer)
+                                    if (feedback != null) {
+                                        if (feedback.isCorrect) {
+                                            soundManager.playCorrectSound(soundEnabled)
+                                            soundManager.vibrate(vibrationEnabled, isSuccess = true)
+                                        } else {
+                                            soundManager.playWrongSound(soundEnabled)
+                                            soundManager.vibrate(vibrationEnabled, isSuccess = false)
+                                        }
+                                        soundManager.speakAppreciation(
+                                            isCorrect = feedback.isCorrect,
+                                            streak = feedback.streak,
+                                            voiceEnabled = voiceEnabled,
+                                            isBengaliQuiz = isBengali
+                                        )
                                     }
-                                    soundManager.speakAppreciation(
-                                        isCorrect = feedback.isCorrect,
-                                        streak = feedback.streak,
-                                        voiceEnabled = voiceEnabled,
-                                        isBengaliQuiz = isBengali
-                                    )
-                                } else if (engine.mode == QuizMode.EXAM) {
-                                    soundManager.playClickSound(soundEnabled)
+                                }
+                            },
+                            isBengali = isBengali
+                        )
+                    } else {
+                        // Options A, B, C, D for MCQ
+                        currentQ.options.forEachIndexed { optIndex, optText ->
+                            val letter = ('A' + optIndex).toString()
+
+                            val (visualState, statusText) = if (engine.mode == QuizMode.PRACTICE) {
+                                if (qState.isAnswered) {
+                                    when {
+                                        qState.answerState == AnswerState.CORRECT && optIndex == currentQ.correctAnswerIndex -> {
+                                            Pair(OptionVisualState.CORRECT_GREEN, if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct")
+                                        }
+                                        qState.answerState == AnswerState.INCORRECT && optIndex == qState.selectedOptionIndex -> {
+                                            Pair(OptionVisualState.WRONG_RED, if (isBengali) "✕ ভুল উত্তর" else "✕ Incorrect")
+                                        }
+                                        qState.answerState == AnswerState.INCORRECT && optIndex == currentQ.correctAnswerIndex -> {
+                                            Pair(OptionVisualState.CORRECT_GREEN, if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct")
+                                        }
+                                        else -> Pair(OptionVisualState.DEFAULT, null)
+                                    }
+                                } else {
+                                    Pair(OptionVisualState.DEFAULT, null)
+                                }
+                            } else {
+                                // Exam Mode: editable blue active state, no spoilers, no green/red
+                                if (qState.selectedOptionIndex == optIndex) {
+                                    Pair(OptionVisualState.SELECTED_BLUE, if (isBengali) "✓ নির্বাচিত" else "✓ Selected")
+                                } else {
+                                    Pair(OptionVisualState.DEFAULT, null)
                                 }
                             }
-                        )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                            GlassOption(
+                                letter = letter,
+                                text = optText,
+                                state = visualState,
+                                statusText = statusText,
+                                enabled = if (engine.mode == QuizMode.PRACTICE) !qState.isLocked else true,
+                                onClick = {
+                                    val feedback = engine.selectOption(optIndex)
+
+                                    if (engine.mode == QuizMode.PRACTICE && feedback != null) {
+                                        if (feedback.isCorrect) {
+                                            soundManager.playCorrectSound(soundEnabled)
+                                            soundManager.vibrate(vibrationEnabled, isSuccess = true)
+                                        } else {
+                                            soundManager.playWrongSound(soundEnabled)
+                                            soundManager.vibrate(vibrationEnabled, isSuccess = false)
+                                        }
+                                        soundManager.speakAppreciation(
+                                            isCorrect = feedback.isCorrect,
+                                            streak = feedback.streak,
+                                            voiceEnabled = voiceEnabled,
+                                            isBengaliQuiz = isBengali
+                                        )
+                                    } else if (engine.mode == QuizMode.EXAM) {
+                                        soundManager.playClickSound(soundEnabled)
+                                    }
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
                     }
 
                     // Practice Mode Feedback Pill & Explanation Card
                     if (engine.mode == QuizMode.PRACTICE && qState.isAnswered) {
                         val isCorrect = qState.answerState == AnswerState.CORRECT
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        if (currentQ.type == QuestionType.MCQ) {
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        // Feedback Banner
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (isCorrect) CorrectGreenBg else WrongRedBg)
-                                .border(
-                                    1.dp,
-                                    if (isCorrect) CorrectGreen else WrongRed,
-                                    RoundedCornerShape(16.dp)
-                                )
-                                .padding(horizontal = 16.dp, vertical = 12.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (isCorrect) Icons.Default.Check else Icons.Default.Close,
-                                    contentDescription = null,
-                                    tint = if (isCorrect) CorrectGreen else WrongRed,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = if (isCorrect) {
-                                        if (isBengali) "সঠিক উত্তর! চমৎকার!" else "Correct Answer! Well done!"
-                                    } else {
-                                        if (isBengali) "ভুল উত্তর! সঠিক উত্তরটি সবুজ চিহ্নিত।" else "Incorrect! Correct answer highlighted in green."
-                                    },
-                                    color = if (isCorrect) Color(0xFF6EE7B7) else Color(0xFFFCA5A5),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                            // Feedback Banner for MCQ
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(if (isCorrect) CorrectGreenBg else WrongRedBg)
+                                    .border(
+                                        1.dp,
+                                        if (isCorrect) CorrectGreen else WrongRed,
+                                        RoundedCornerShape(16.dp)
+                                    )
+                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (isCorrect) Icons.Default.Check else Icons.Default.Close,
+                                        contentDescription = null,
+                                        tint = if (isCorrect) CorrectGreen else WrongRed,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = if (isCorrect) {
+                                            if (isBengali) "সঠিক উত্তর! চমৎকার!" else "Correct Answer! Well done!"
+                                        } else {
+                                            if (isBengali) "ভুল উত্তর! সঠিক উত্তরটি সবুজ চিহ্নিত।" else "Incorrect! Correct answer highlighted in green."
+                                        },
+                                        color = if (isCorrect) Color(0xFF6EE7B7) else Color(0xFFFCA5A5),
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
 
-                        // Explanation Card
+                        // Explanation Card for both MCQ and Fill Blank
                         if (showExplanationsSetting && !currentQ.explanation.isNullOrBlank()) {
                             Spacer(modifier = Modifier.height(12.dp))
                             GlassCard(
@@ -469,7 +516,7 @@ fun QuizPlayScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            val answeredCount = engine.selectedAnswers.size
+                            val answeredCount = (0 until engine.totalQuestions).count { engine.getQuestionState(it).isAnswered }
                             Text(
                                 text = "$answeredCount/${engine.totalQuestions}",
                                 color = Color.White,
@@ -560,7 +607,7 @@ fun QuizPlayScreen(
                     ) {
                         items(engine.totalQuestions) { qIdx ->
                             val isCurrent = (qIdx == currentQIndex)
-                            val isQAnswered = engine.selectedAnswers.containsKey(qIdx)
+                            val isQAnswered = engine.getQuestionState(qIdx).isAnswered
 
                             Box(
                                 modifier = Modifier
@@ -601,8 +648,9 @@ fun QuizPlayScreen(
 
                     Spacer(modifier = Modifier.height(28.dp))
 
+                    val totalAnswered = (0 until engine.totalQuestions).count { engine.getQuestionState(it).isAnswered }
                     GlassPrimaryButton(
-                        text = "Submit Exam (${engine.selectedAnswers.size}/${engine.totalQuestions} answered)",
+                        text = "Submit Exam ($totalAnswered/${engine.totalQuestions} answered)",
                         onClick = {
                             showNavigatorSheet = false
                             showSubmitConfirmDialog = true
@@ -617,7 +665,8 @@ fun QuizPlayScreen(
 
         // Submit Exam Confirmation Dialog
         if (showSubmitConfirmDialog) {
-            val unansweredCount = engine.totalQuestions - engine.selectedAnswers.size
+            val totalAnswered = (0 until engine.totalQuestions).count { engine.getQuestionState(it).isAnswered }
+            val unansweredCount = engine.totalQuestions - totalAnswered
             val msg = if (unansweredCount > 0) {
                 "You have $unansweredCount unanswered question${if (unansweredCount > 1) "s" else ""}. Are you sure you want to submit your exam now?"
             } else {

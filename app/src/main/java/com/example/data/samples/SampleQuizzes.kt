@@ -1,6 +1,7 @@
 package com.example.data.samples
 
 import com.example.data.model.QuestionSchema
+import com.example.data.model.QuestionType
 import com.example.data.model.QuizJsonParser
 import com.example.data.model.QuizSchema
 
@@ -358,8 +359,73 @@ object SampleQuizzes {
         )
     )
 
+    val MIXED_DISCOVERY_QUIZ = QuizSchema(
+        version = 1,
+        title = "Universal Explorer (MCQ + Fill-in)",
+        description = "Experience both Multiple Choice and Fill-in-the-Blank questions with live instant feedback.",
+        category = "General Knowledge",
+        difficulty = "Medium",
+        timeLimit = 240,
+        shuffleQuestions = false,
+        shuffleOptions = false,
+        questions = listOf(
+            QuestionSchema(
+                id = "mix_q1",
+                type = QuestionType.MCQ,
+                question = "Which planet in our solar system is known as the Red Planet?",
+                options = listOf("Venus", "Mars", "Jupiter", "Saturn"),
+                answer = 1,
+                points = 1,
+                explanation = "Mars is known as the Red Planet due to the large amount of iron oxide (rust) on its surface."
+            ),
+            QuestionSchema(
+                id = "mix_q2",
+                type = QuestionType.FILL_BLANK,
+                question = "What is the capital city of Bangladesh?",
+                options = emptyList(),
+                answer = 0,
+                fillBlankAnswer = "Dhaka",
+                acceptedAnswers = listOf("Dhaka", "ঢাকা"),
+                points = 1,
+                explanation = "Dhaka has been the bustling capital of Bangladesh since independence in 1971."
+            ),
+            QuestionSchema(
+                id = "mix_q3",
+                type = QuestionType.MCQ,
+                question = "What is the hardest natural mineral substance found on Earth?",
+                options = listOf("Gold", "Iron", "Diamond", "Quartz"),
+                answer = 2,
+                points = 1,
+                explanation = "Diamond scores a maximum 10 on the Mohs scale of mineral hardness."
+            ),
+            QuestionSchema(
+                id = "mix_q4",
+                type = QuestionType.FILL_BLANK,
+                question = "What is the chemical symbol for Water?",
+                options = emptyList(),
+                answer = 0,
+                fillBlankAnswer = "H2O",
+                acceptedAnswers = listOf("H2O", "h2o"),
+                points = 1,
+                explanation = "Water is composed of two hydrogen atoms bonded to one oxygen atom (H2O)."
+            ),
+            QuestionSchema(
+                id = "mix_q5",
+                type = QuestionType.FILL_BLANK,
+                question = "How many continents are there on planet Earth?",
+                options = emptyList(),
+                answer = 0,
+                fillBlankAnswer = "7",
+                acceptedAnswers = listOf("7", "seven"),
+                points = 1,
+                explanation = "The seven continents are Asia, Africa, North America, South America, Antarctica, Europe, and Australia."
+            )
+        )
+    )
+
     val ALL_SAMPLES = listOf(
         BENGALI_QUIZ,
+        MIXED_DISCOVERY_QUIZ,
         GENERAL_KNOWLEDGE_QUIZ,
         SCIENCE_QUIZ,
         MATH_QUIZ,

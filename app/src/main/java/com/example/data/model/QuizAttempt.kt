@@ -8,15 +8,17 @@ enum class QuizMode {
 data class QuestionReviewItem(
     val questionNumber: Int,
     val questionText: String,
-    val options: List<String>,
-    val userAnswerIndex: Int?, // null if skipped/unanswered
-    val correctAnswerIndex: Int,
-    val userAnswerText: String?,
-    val correctAnswerText: String,
+    val options: List<String> = emptyList(),
+    val userAnswerIndex: Int?, // null if skipped/unanswered (for MCQ)
+    val correctAnswerIndex: Int = -1, // for MCQ
+    val userAnswerText: String?, // Selected option (MCQ) or typed text (Fill Blank)
+    val correctAnswerText: String, // Correct option (MCQ) or primary correct answer (Fill Blank)
     val isCorrect: Boolean,
     val pointsEarned: Int,
     val maxPoints: Int,
-    val explanation: String?
+    val explanation: String?,
+    val questionType: QuestionType = QuestionType.MCQ,
+    val acceptedAnswers: List<String> = emptyList()
 )
 
 data class QuizResultSummary(

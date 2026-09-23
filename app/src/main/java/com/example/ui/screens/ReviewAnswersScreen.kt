@@ -20,8 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.QuestionReviewItem
+import com.example.data.model.QuestionType
 import com.example.data.model.QuizResultSummary
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassFilterChip
@@ -46,7 +47,6 @@ import com.example.ui.theme.CorrectGreen
 import com.example.ui.theme.CorrectGreenBg
 import com.example.ui.theme.CorrectGreenBorder
 import com.example.ui.theme.GlassBorderBrush
-import com.example.ui.theme.GlassCardSurface
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -124,6 +124,12 @@ fun ReviewQuestionCard(
     item: QuestionReviewItem,
     modifier: Modifier = Modifier
 ) {
+    val isSkipped = if (item.questionType == QuestionType.FILL_BLANK) {
+        item.userAnswerText.isNullOrBlank()
+    } else {
+        item.userAnswerIndex == null
+    }
+
     GlassCard(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -141,12 +147,30 @@ fun ReviewQuestionCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Question ${item.questionNumber}",
-                    color = AccentCyan,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Question ${item.questionNumber}",
+                        color = AccentCyan,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (item.questionType == QuestionType.FILL_BLANK) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0x3338BDF8))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "Fill in Blank",
+                                color = AccentCyan,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
 
                 val (badgeBg, badgeBorder, badgeText, badgeColor) = when {
                     item.isCorrect -> Quadruple(
@@ -155,7 +179,7 @@ fun ReviewQuestionCard(
                         "Correct (+${item.pointsEarned})",
                         CorrectGreen
                     )
-                    item.userAnswerIndex == null -> Quadruple(
+                    isSkipped -> Quadruple(
                         Color(0x25FFFFFF),
                         Color(0x40FFFFFF),
                         "Skipped (0)",
@@ -198,82 +222,180 @@ fun ReviewQuestionCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Options List
-            item.options.forEachIndexed { optIdx, optText ->
-                val letter = ('A' + optIdx).toString()
-                val isCorrectAnswer = (optIdx == item.correctAnswerIndex)
-                val isUserSelection = (optIdx == item.userAnswerIndex)
-
-                val (optBg, optBorder, icon) = when {
-                    isCorrectAnswer -> Triple(
-                        CorrectGreenBg,
-                        BorderStroke(1.5.dp, CorrectGreenBorder),
-                        Icons.Default.Check
-                    )
-                    isUserSelection && !item.isCorrect -> Triple(
-                        WrongRedBg,
-                        BorderStroke(1.5.dp, WrongRedBorder),
-                        Icons.Default.Close
-                    )
-                    else -> Triple(
-                        Color(0x18FFFFFF),
-                        BorderStroke(1.dp, Color(0x25FFFFFF)),
-                        null
-                    )
+            if (item.questionType == QuestionType.FILL_BLANK) {
+                // User's typed answer
+                val userText = item.userAnswerText?.trim()
+                val (userBg, userBorder, userIconTint) = when {
+                    item.isCorrect -> Triple(CorrectGreenBg, CorrectGreenBorder, CorrectGreen)
+                    isSkipped -> Triple(Color(0x18FFFFFF), Color(0x25FFFFFF), TextMuted)
+                    else -> Triple(WrongRedBg, WrongRedBorder, WrongRed)
                 }
 
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(optBg)
-                        .border(optBorder.width, optBorder.brush, RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(userBg)
+                        .border(1.dp, userBorder, RoundedCornerShape(14.dp))
                         .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when {
-                                        isCorrectAnswer -> CorrectGreen
-                                        isUserSelection && !item.isCorrect -> WrongRed
-                                        else -> Color(0x25FFFFFF)
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
+                        Icon(
+                            imageVector = when {
+                                item.isCorrect -> Icons.Default.Check
+                                isSkipped -> Icons.Default.Edit
+                                else -> Icons.Default.Close
+                            },
+                            contentDescription = null,
+                            tint = userIconTint,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Your Answer:",
+                                color = TextMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = if (userText.isNullOrEmpty()) "(No answer entered)" else userText,
+                                color = if (userText.isNullOrEmpty()) TextMuted else TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+
+                // If incorrect or skipped, display the correct answer
+                if (!item.isCorrect) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(CorrectGreenBg.copy(alpha = 0.35f))
+                            .border(1.dp, CorrectGreenBorder, RoundedCornerShape(14.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (icon != null) {
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            } else {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = CorrectGreen,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
                                 Text(
-                                    text = letter,
-                                    color = Color.White,
-                                    fontSize = 12.sp,
+                                    text = "Correct Answer:",
+                                    color = Color(0xFF6EE7B7),
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
+                                Text(
+                                    text = item.correctAnswerText,
+                                    color = TextPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (item.acceptedAnswers.size > 1) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Accepted variations: ${item.acceptedAnswers.joinToString(", ")}",
+                                        color = TextMuted,
+                                        fontSize = 11.sp
+                                    )
+                                }
                             }
                         }
+                    }
+                }
+            } else {
+                // MCQ Options List
+                item.options.forEachIndexed { optIdx, optText ->
+                    val letter = ('A' + optIdx).toString()
+                    val isCorrectAnswer = (optIdx == item.correctAnswerIndex)
+                    val isUserSelection = (optIdx == item.userAnswerIndex)
 
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Text(
-                            text = optText,
-                            color = if (isCorrectAnswer || isUserSelection) TextPrimary else TextSecondary,
-                            fontSize = 14.sp,
-                            fontWeight = if (isCorrectAnswer || isUserSelection) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier = Modifier.weight(1f)
+                    val (optBg, optBorder, icon) = when {
+                        isCorrectAnswer -> Triple(
+                            CorrectGreenBg,
+                            BorderStroke(1.5.dp, CorrectGreenBorder),
+                            Icons.Default.Check
                         )
+                        isUserSelection && !item.isCorrect -> Triple(
+                            WrongRedBg,
+                            BorderStroke(1.5.dp, WrongRedBorder),
+                            Icons.Default.Close
+                        )
+                        else -> Triple(
+                            Color(0x18FFFFFF),
+                            BorderStroke(1.dp, Color(0x25FFFFFF)),
+                            null
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(optBg)
+                            .border(optBorder.width, optBorder.brush, RoundedCornerShape(16.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            isCorrectAnswer -> CorrectGreen
+                                            isUserSelection && !item.isCorrect -> WrongRed
+                                            else -> Color(0x25FFFFFF)
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (icon != null) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                } else {
+                                    Text(
+                                        text = letter,
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Text(
+                                text = optText,
+                                color = if (isCorrectAnswer || isUserSelection) TextPrimary else TextSecondary,
+                                fontSize = 14.sp,
+                                fontWeight = if (isCorrectAnswer || isUserSelection) FontWeight.SemiBold else FontWeight.Normal,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             }

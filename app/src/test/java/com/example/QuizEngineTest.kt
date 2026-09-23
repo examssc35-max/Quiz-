@@ -574,5 +574,170 @@ class QuizEngineTest {
         assertEquals(1, restoredQ1State.selectedOptionIndex)
         assertEquals(com.example.engine.AnswerState.CORRECT, restoredQ1State.answerState)
     }
+
+    @Test
+    fun testFillBlank_ParsingAndBackwardCompatibility() {
+        val mixedJson = """
+            {
+                "title": "Mixed Question Test",
+                "questions": [
+                    {
+                        "id": "q1",
+                        "question": "What is 2 + 2?",
+                        "options": ["3", "4", "5"],
+                        "answer": 1
+                    },
+                    {
+                        "id": "q2",
+                        "type": "fill_blank",
+                        "question": "The capital of Bangladesh is _____.",
+                        "answer": "Dhaka",
+                        "acceptedAnswers": ["Dhaka", "ঢাকা"]
+                    },
+                    {
+                        "id": "q3",
+                        "type": "fill_blank",
+                        "question": "Water chemical formula",
+                        "answer": ["H2O", "h2o"]
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val parsed = QuizJsonParser.validateAndParse(mixedJson).getOrThrow()
+        assertEquals(3, parsed.questions.size)
+
+        // Q1 is auto-detected as MCQ
+        assertEquals(com.example.data.model.QuestionType.MCQ, parsed.questions[0].type)
+        assertEquals(1, parsed.questions[0].answer)
+        assertEquals(3, parsed.questions[0].options.size)
+
+        // Q2 is FILL_BLANK with primary answer and accepted answers
+        assertEquals(com.example.data.model.QuestionType.FILL_BLANK, parsed.questions[1].type)
+        assertEquals("Dhaka", parsed.questions[1].fillBlankAnswer)
+        assertTrue(parsed.questions[1].acceptedAnswers.contains("ঢাকা"))
+
+        // Q3 is FILL_BLANK with array answer
+        assertEquals(com.example.data.model.QuestionType.FILL_BLANK, parsed.questions[2].type)
+        assertEquals("H2O", parsed.questions[2].fillBlankAnswer)
+        assertEquals(2, parsed.questions[2].acceptedAnswers.size)
+    }
+
+    @Test
+    fun testFillBlank_AnswerComparisonNormalization() {
+        val accepted = listOf("Dhaka", "ঢাকা", "New York City")
+
+        // Exact match
+        assertTrue(com.example.data.model.AnswerComparison.isAnswerCorrect("Dhaka", accepted))
+        // Case-insensitivity
+        assertTrue(com.example.data.model.AnswerComparison.isAnswerCorrect("dhaka", accepted))
+        assertTrue(com.example.data.model.AnswerComparison.isAnswerCorrect("DHAKA", accepted))
+        // Leading/trailing whitespace
+        assertTrue(com.example.data.model.AnswerComparison.isAnswerCorrect("   dhaka   ", accepted))
+        // Internal multiple spaces
+        assertTrue(com.example.data.model.AnswerComparison.isAnswerCorrect("new   york   city", accepted))
+        // Bengali exact
+        assertTrue(com.example.data.model.AnswerComparison.isAnswerCorrect("ঢাকা", accepted))
+
+        // Incorrect answers
+        assertFalse(com.example.data.model.AnswerComparison.isAnswerCorrect("Chittagong", accepted))
+        assertFalse(com.example.data.model.AnswerComparison.isAnswerCorrect("", accepted))
+        assertFalse(com.example.data.model.AnswerComparison.isAnswerCorrect("   ", accepted))
+    }
+
+    @Test
+    fun testFillBlank_PracticeMode_LiveFeedbackAndPoints() {
+        val schema = QuizSchema(
+            title = "Fill Blank Practice",
+            questions = listOf(
+                QuestionSchema(
+                    id = "fb1",
+                    type = com.example.data.model.QuestionType.FILL_BLANK,
+                    question = "Capital of France?",
+                    fillBlankAnswer = "Paris",
+                    acceptedAnswers = listOf("Paris", "paris"),
+                    points = 5
+                )
+            )
+        )
+
+        val engine = QuizEngine("fb_quiz", schema, QuizMode.PRACTICE)
+        assertEquals(0, engine.score)
+        assertEquals(0, engine.streak)
+
+        // Submit correct answer
+        val feedback = engine.submitTextAnswer("  paris  ")
+        assertNotNull(feedback)
+        assertTrue(feedback!!.isCorrect)
+        assertEquals(5, engine.score)
+        assertEquals(1, engine.streak)
+
+        // Question must now be locked
+        assertTrue(engine.isCurrentQuestionLocked)
+        assertEquals(com.example.engine.AnswerState.CORRECT, engine.getQuestionState(0).answerState)
+
+        // Attempting to submit again should return null and not modify score
+        val secondFeedback = engine.submitTextAnswer("Rome")
+        assertEquals(null, secondFeedback)
+        assertEquals(5, engine.score)
+    }
+
+    @Test
+    fun testFillBlank_ExamMode_EditableAndSubmittedCorrectly() {
+        val schema = QuizSchema(
+            title = "Fill Blank Exam",
+            questions = listOf(
+                QuestionSchema(
+                    id = "fb1",
+                    type = com.example.data.model.QuestionType.FILL_BLANK,
+                    question = "Capital of Japan?",
+                    fillBlankAnswer = "Tokyo",
+                    acceptedAnswers = listOf("Tokyo", "tokyo"),
+                    points = 2
+                ),
+                QuestionSchema(
+                    id = "mcq1",
+                    type = com.example.data.model.QuestionType.MCQ,
+                    question = "2 + 2?",
+                    options = listOf("3", "4"),
+                    answer = 1,
+                    points = 3
+                )
+            )
+        )
+
+        val engine = QuizEngine("exam_quiz", schema, QuizMode.EXAM)
+
+        // Fill-in Q1: initial answer
+        engine.updateExamTextAnswer("Kyoto")
+        assertEquals("Kyoto", engine.userTextAnswers[0])
+        assertFalse(engine.isCurrentQuestionLocked)
+
+        // Update answer before submitting exam
+        engine.updateExamTextAnswer("Tokyo")
+        assertEquals("Tokyo", engine.userTextAnswers[0])
+
+        // Move to Q2 and select correct MCQ option
+        assertTrue(engine.nextQuestion())
+        engine.selectOption(1)
+
+        // Submit Exam
+        val summary = engine.submitExam()
+        assertEquals(2, summary.totalQuestions)
+        assertEquals(2, summary.correctCount)
+        assertEquals(0, summary.wrongCount)
+        assertEquals(5, summary.score)
+        assertEquals(100f, summary.accuracy)
+
+        // Verify review items
+        val q1Review = summary.reviewItems[0]
+        assertEquals("Tokyo", q1Review.userAnswerText)
+        assertEquals("Tokyo", q1Review.correctAnswerText)
+        assertTrue(q1Review.isCorrect)
+
+        val q2Review = summary.reviewItems[1]
+        assertEquals("4", q2Review.userAnswerText)
+        assertTrue(q2Review.isCorrect)
+    }
 }
 

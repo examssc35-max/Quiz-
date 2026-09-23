@@ -3,6 +3,37 @@ package com.example.data.model
 import org.json.JSONArray
 import org.json.JSONObject
 
+enum class QuestionType {
+    MCQ,
+    FILL_BLANK;
+
+    companion object {
+        fun fromString(typeStr: String?): QuestionType? {
+            return when (typeStr?.lowercase()?.trim()) {
+                "mcq" -> MCQ
+                "fill_blank", "fill-in-the-blank", "fillblank", "fill_in_the_blank" -> FILL_BLANK
+                else -> null
+            }
+        }
+    }
+}
+
+object AnswerComparison {
+    fun normalize(text: String): String {
+        return text.trim()
+            .replace(Regex("\\s+"), " ")
+            .lowercase()
+    }
+
+    fun isAnswerCorrect(userAnswer: String, acceptedAnswers: List<String>): Boolean {
+        val normalizedUser = normalize(userAnswer)
+        if (normalizedUser.isEmpty()) return false
+        return acceptedAnswers.any { accepted ->
+            normalize(accepted) == normalizedUser
+        }
+    }
+}
+
 data class QuizSchema(
     val version: Int = 1,
     val title: String,
@@ -17,12 +48,35 @@ data class QuizSchema(
 
 data class QuestionSchema(
     val id: String,
+    val type: QuestionType = QuestionType.MCQ,
     val question: String,
-    val options: List<String>,
-    val answer: Int, // 0-based index of correct option
+    val options: List<String> = emptyList(),
+    val answer: Int = 0, // 0-based index of correct option for MCQ
+    val fillBlankAnswer: String = "", // Primary correct answer for FILL_BLANK
+    val acceptedAnswers: List<String> = emptyList(), // All accepted answers for FILL_BLANK
     val points: Int = 1,
     val explanation: String? = null
-)
+) {
+    // Secondary constructor for existing code constructing MCQ questions without 'type'
+    constructor(
+        id: String,
+        question: String,
+        options: List<String>,
+        answer: Int,
+        points: Int = 1,
+        explanation: String? = null
+    ) : this(
+        id = id,
+        type = QuestionType.MCQ,
+        question = question,
+        options = options,
+        answer = answer,
+        fillBlankAnswer = "",
+        acceptedAnswers = emptyList(),
+        points = points,
+        explanation = explanation
+    )
+}
 
 object QuizJsonParser {
 
@@ -63,7 +117,6 @@ object QuizJsonParser {
                 val qObj = questionsArray.getJSONObject(i)
                 val id = qObj.optString("id", "q_${i + 1}").ifBlank { "q_${i + 1}" }
                 if (ids.contains(id)) {
-                    // Make unique if duplicated
                     ids.add("${id}_${i + 1}")
                 } else {
                     ids.add(id)
@@ -74,25 +127,16 @@ object QuizJsonParser {
                     throw IllegalArgumentException("Question #${i + 1} has empty text")
                 }
 
-                if (!qObj.has("options")) {
-                    throw IllegalArgumentException("Question #${i + 1} is missing 'options' array")
-                }
+                // Detect question type
+                val rawType = qObj.optString("type", "").trim()
+                val parsedType = QuestionType.fromString(rawType)
 
-                val optionsArray = qObj.getJSONArray("options")
-                if (optionsArray.length() < 2) {
-                    throw IllegalArgumentException("Question #${i + 1} must have at least 2 options")
-                }
-
-                val optionsList = mutableListOf<String>()
-                for (j in 0 until optionsArray.length()) {
-                    optionsList.add(optionsArray.getString(j).trim())
-                }
-
-                val answerIndex = qObj.optInt("answer", -1)
-                if (answerIndex < 0 || answerIndex >= optionsList.size) {
-                    throw IllegalArgumentException(
-                        "Question #${i + 1} has invalid answer index $answerIndex (must be between 0 and ${optionsList.size - 1})"
-                    )
+                val questionType = when {
+                    parsedType != null -> parsedType
+                    qObj.has("options") -> QuestionType.MCQ
+                    qObj.has("answer") && (qObj.get("answer") is String || qObj.get("answer") is JSONArray) -> QuestionType.FILL_BLANK
+                    rawType.isNotEmpty() -> throw IllegalArgumentException("Question #${i + 1} has invalid type: '$rawType'")
+                    else -> throw IllegalArgumentException("Question #${i + 1} must specify 'type' or provide 'options'")
                 }
 
                 val points = qObj.optInt("points", 1).coerceAtLeast(1)
@@ -100,16 +144,102 @@ object QuizJsonParser {
                     qObj.optString("explanation", "").trim().ifEmpty { null }
                 } else null
 
-                questions.add(
-                    QuestionSchema(
-                        id = id,
-                        question = questionText,
-                        options = optionsList,
-                        answer = answerIndex,
-                        points = points,
-                        explanation = explanation
+                if (questionType == QuestionType.MCQ) {
+                    if (!qObj.has("options")) {
+                        throw IllegalArgumentException("Question #${i + 1} is missing 'options' array")
+                    }
+
+                    val optionsArray = qObj.getJSONArray("options")
+                    if (optionsArray.length() < 2) {
+                        throw IllegalArgumentException("Question #${i + 1} must have at least 2 options")
+                    }
+
+                    val optionsList = mutableListOf<String>()
+                    for (j in 0 until optionsArray.length()) {
+                        optionsList.add(optionsArray.getString(j).trim())
+                    }
+
+                    val answerIndex = qObj.optInt("answer", -1)
+                    if (answerIndex < 0 || answerIndex >= optionsList.size) {
+                        throw IllegalArgumentException(
+                            "Question #${i + 1} has invalid answer index $answerIndex (must be between 0 and ${optionsList.size - 1})"
+                        )
+                    }
+
+                    questions.add(
+                        QuestionSchema(
+                            id = id,
+                            type = QuestionType.MCQ,
+                            question = questionText,
+                            options = optionsList,
+                            answer = answerIndex,
+                            points = points,
+                            explanation = explanation
+                        )
                     )
-                )
+                } else {
+                    // Fill-in-the-blank question
+                    if (!qObj.has("answer")) {
+                        throw IllegalArgumentException("Question #${i + 1} is missing 'answer' field for fill_blank")
+                    }
+
+                    val acceptedAnswers = mutableListOf<String>()
+                    val rawAnswer = qObj.get("answer")
+
+                    when (rawAnswer) {
+                        is JSONArray -> {
+                            for (j in 0 until rawAnswer.length()) {
+                                val item = rawAnswer.getString(j).trim()
+                                if (item.isNotEmpty() && !acceptedAnswers.contains(item)) {
+                                    acceptedAnswers.add(item)
+                                }
+                            }
+                        }
+                        is String -> {
+                            val str = rawAnswer.trim()
+                            if (str.isNotEmpty()) {
+                                acceptedAnswers.add(str)
+                            }
+                        }
+                        else -> {
+                            val str = rawAnswer.toString().trim()
+                            if (str.isNotEmpty()) {
+                                acceptedAnswers.add(str)
+                            }
+                        }
+                    }
+
+                    // Optional extra accepted answers array
+                    if (qObj.has("acceptedAnswers")) {
+                        val extraArr = qObj.getJSONArray("acceptedAnswers")
+                        for (j in 0 until extraArr.length()) {
+                            val item = extraArr.getString(j).trim()
+                            if (item.isNotEmpty() && !acceptedAnswers.contains(item)) {
+                                acceptedAnswers.add(item)
+                            }
+                        }
+                    }
+
+                    if (acceptedAnswers.isEmpty()) {
+                        throw IllegalArgumentException("Question #${i + 1} must have at least one non-empty answer")
+                    }
+
+                    val primaryAnswer = acceptedAnswers.first()
+
+                    questions.add(
+                        QuestionSchema(
+                            id = id,
+                            type = QuestionType.FILL_BLANK,
+                            question = questionText,
+                            options = emptyList(),
+                            answer = 0,
+                            fillBlankAnswer = primaryAnswer,
+                            acceptedAnswers = acceptedAnswers,
+                            points = points,
+                            explanation = explanation
+                        )
+                    )
+                }
             }
 
             QuizSchema(
@@ -143,11 +273,23 @@ object QuizJsonParser {
             qObj.put("id", q.id)
             qObj.put("question", q.question)
 
-            val optionsArr = JSONArray()
-            q.options.forEach { opt -> optionsArr.put(opt) }
-            qObj.put("options", optionsArr)
+            if (q.type == QuestionType.FILL_BLANK) {
+                qObj.put("type", "fill_blank")
+                if (q.acceptedAnswers.size > 1) {
+                    val ansArr = JSONArray()
+                    q.acceptedAnswers.forEach { ansArr.put(it) }
+                    qObj.put("answer", ansArr)
+                } else {
+                    qObj.put("answer", q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" })
+                }
+            } else {
+                qObj.put("type", "mcq")
+                val optionsArr = JSONArray()
+                q.options.forEach { opt -> optionsArr.put(opt) }
+                qObj.put("options", optionsArr)
+                qObj.put("answer", q.answer)
+            }
 
-            qObj.put("answer", q.answer)
             qObj.put("points", q.points)
             if (q.explanation != null) {
                 qObj.put("explanation", q.explanation)

@@ -6,8 +6,10 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.data.local.entity.UnfinishedQuizEntity
+import com.example.data.model.AnswerComparison
 import com.example.data.model.QuestionReviewItem
 import com.example.data.model.QuestionSchema
+import com.example.data.model.QuestionType
 import com.example.data.model.QuizMode
 import com.example.data.model.QuizResultSummary
 import com.example.data.model.QuizSchema
@@ -23,26 +25,32 @@ enum class AnswerState {
 data class QuestionAnswerState(
     val isAnswered: Boolean = false,
     val selectedOptionIndex: Int? = null,
+    val userTextAnswer: String? = null,
     val answerState: AnswerState = AnswerState.UNANSWERED,
     val isLocked: Boolean = false
 )
 
 data class ActiveQuestion(
     val id: String,
+    val type: QuestionType,
     val questionText: String,
     val options: List<String>,
     val correctAnswerIndex: Int,
+    val fillBlankAnswer: String,
+    val acceptedAnswers: List<String>,
     val points: Int,
     val explanation: String?
 )
 
 data class AnswerFeedback(
     val isCorrect: Boolean,
-    val selectedOptionIndex: Int,
-    val correctOptionIndex: Int,
+    val selectedOptionIndex: Int = -1,
+    val correctOptionIndex: Int = -1,
     val streak: Int,
     val pointsEarned: Int,
-    val explanation: String?
+    val explanation: String?,
+    val userTextAnswer: String? = null,
+    val correctTextAnswer: String? = null
 )
 
 class QuizEngine(
@@ -61,6 +69,7 @@ class QuizEngine(
 
     // Backwards-compatible raw maps for serialization & review
     val selectedAnswers = mutableMapOf<Int, Int>()
+    val userTextAnswers = mutableMapOf<Int, String>()
     val lockedState = mutableMapOf<Int, Boolean>()
 
     var score: Int by mutableIntStateOf(0)
@@ -86,24 +95,40 @@ class QuizEngine(
         }
 
         questions = rawQuestions.map { q ->
-            val indexedOptions = q.options.mapIndexed { index, text -> index to text }
-            val finalIndexedOptions = if (quizSchema.shuffleOptions) {
-                indexedOptions.shuffled()
+            if (q.type == QuestionType.FILL_BLANK) {
+                ActiveQuestion(
+                    id = q.id,
+                    type = QuestionType.FILL_BLANK,
+                    questionText = q.question,
+                    options = emptyList(),
+                    correctAnswerIndex = -1,
+                    fillBlankAnswer = q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" },
+                    acceptedAnswers = if (q.acceptedAnswers.isNotEmpty()) q.acceptedAnswers else listOf(q.fillBlankAnswer),
+                    points = q.points,
+                    explanation = q.explanation
+                )
             } else {
-                indexedOptions
-            }
-            val finalOptions = finalIndexedOptions.map { it.second }
-            // Stable mapping: correct option is wherever original index matches q.answer
-            val finalCorrectIndex = finalIndexedOptions.indexOfFirst { it.first == q.answer }
+                val indexedOptions = q.options.mapIndexed { index, text -> index to text }
+                val finalIndexedOptions = if (quizSchema.shuffleOptions) {
+                    indexedOptions.shuffled()
+                } else {
+                    indexedOptions
+                }
+                val finalOptions = finalIndexedOptions.map { it.second }
+                val finalCorrectIndex = finalIndexedOptions.indexOfFirst { it.first == q.answer }
 
-            ActiveQuestion(
-                id = q.id,
-                questionText = q.question,
-                options = finalOptions,
-                correctAnswerIndex = finalCorrectIndex,
-                points = q.points,
-                explanation = q.explanation
-            )
+                ActiveQuestion(
+                    id = q.id,
+                    type = QuestionType.MCQ,
+                    questionText = q.question,
+                    options = finalOptions,
+                    correctAnswerIndex = if (finalCorrectIndex >= 0) finalCorrectIndex else 0,
+                    fillBlankAnswer = "",
+                    acceptedAnswers = emptyList(),
+                    points = q.points,
+                    explanation = q.explanation
+                )
+            }
         }
 
         totalQuestions = questions.size
@@ -127,8 +152,6 @@ class QuizEngine(
     ) {
         // Reconstruct exact state
         try {
-            val qOrderArr = JSONArray(unfinished.questionOrderJson)
-            val optOrderObj = JSONObject(unfinished.optionOrderJson)
             val answersObj = JSONObject(unfinished.answersStateJson)
             val lockedObj = JSONObject(unfinished.lockedStateJson)
 
@@ -137,13 +160,21 @@ class QuizEngine(
             score = unfinished.score
             streak = unfinished.streak
 
-            // Restore selected answers
+            // Restore selected and typed answers
             val keys = answersObj.keys()
             while (keys.hasNext()) {
                 val k = keys.next()
                 val qIdx = k.toIntOrNull()
-                if (qIdx != null) {
-                    selectedAnswers[qIdx] = answersObj.getInt(k)
+                if (qIdx != null && qIdx in questions.indices) {
+                    val q = questions[qIdx]
+                    if (q.type == QuestionType.FILL_BLANK) {
+                        userTextAnswers[qIdx] = answersObj.optString(k, "")
+                    } else {
+                        val sel = answersObj.optInt(k, -1)
+                        if (sel >= 0) {
+                            selectedAnswers[qIdx] = sel
+                        }
+                    }
                 }
             }
 
@@ -159,24 +190,48 @@ class QuizEngine(
 
             // Populate reactive questionStates from restored data
             for (i in 0 until totalQuestions) {
-                val userSelected = selectedAnswers[i]
-                val isLocked = lockedState[i] == true
                 val q = questions.getOrNull(i)
-                val isCorrect = (userSelected != null && q != null && userSelected == q.correctAnswerIndex)
+                val isLocked = lockedState[i] == true
 
-                val answerState = when {
-                    userSelected == null -> AnswerState.UNANSWERED
-                    mode == QuizMode.EXAM -> AnswerState.UNANSWERED
-                    isCorrect -> AnswerState.CORRECT
-                    else -> AnswerState.INCORRECT
+                if (q != null && q.type == QuestionType.FILL_BLANK) {
+                    val userText = userTextAnswers[i]
+                    val isAnswered = !userText.isNullOrBlank()
+                    val isCorrect = isAnswered && AnswerComparison.isAnswerCorrect(userText!!, q.acceptedAnswers)
+
+                    val answerState = when {
+                        !isAnswered -> AnswerState.UNANSWERED
+                        mode == QuizMode.EXAM -> AnswerState.UNANSWERED
+                        isCorrect -> AnswerState.CORRECT
+                        else -> AnswerState.INCORRECT
+                    }
+
+                    questionStates[i] = QuestionAnswerState(
+                        isAnswered = isAnswered,
+                        selectedOptionIndex = null,
+                        userTextAnswer = userText,
+                        answerState = answerState,
+                        isLocked = isLocked
+                    )
+                } else {
+                    val userSelected = selectedAnswers[i]
+                    val isAnswered = userSelected != null
+                    val isCorrect = (userSelected != null && q != null && userSelected == q.correctAnswerIndex)
+
+                    val answerState = when {
+                        userSelected == null -> AnswerState.UNANSWERED
+                        mode == QuizMode.EXAM -> AnswerState.UNANSWERED
+                        isCorrect -> AnswerState.CORRECT
+                        else -> AnswerState.INCORRECT
+                    }
+
+                    questionStates[i] = QuestionAnswerState(
+                        isAnswered = isAnswered,
+                        selectedOptionIndex = userSelected,
+                        userTextAnswer = null,
+                        answerState = answerState,
+                        isLocked = isLocked
+                    )
                 }
-
-                questionStates[i] = QuestionAnswerState(
-                    isAnswered = userSelected != null,
-                    selectedOptionIndex = userSelected,
-                    answerState = answerState,
-                    isLocked = isLocked
-                )
             }
         } catch (e: Exception) {
             // Graceful fallback to default engine
@@ -197,7 +252,7 @@ class QuizEngine(
     }
 
     /**
-     * Handles option selection with atomic double-click and state safety.
+     * Handles option selection for MCQ questions.
      * In Practice Mode: locks question immediately, validates live, updates score & streak.
      * In Exam Mode: stores selection without validation or locking, allows changing answer.
      */
@@ -205,6 +260,7 @@ class QuizEngine(
     fun selectOption(optionIndex: Int): AnswerFeedback? {
         val q = currentQuestion ?: return null
         val qIndex = currentQuestionIndex
+        if (q.type != QuestionType.MCQ) return null
 
         if (mode == QuizMode.PRACTICE) {
             val currentState = questionStates[qIndex]
@@ -224,6 +280,7 @@ class QuizEngine(
             questionStates[qIndex] = QuestionAnswerState(
                 isAnswered = true,
                 selectedOptionIndex = optionIndex,
+                userTextAnswer = null,
                 answerState = answerState,
                 isLocked = true
             )
@@ -252,11 +309,84 @@ class QuizEngine(
             questionStates[qIndex] = QuestionAnswerState(
                 isAnswered = true,
                 selectedOptionIndex = optionIndex,
+                userTextAnswer = null,
                 answerState = AnswerState.UNANSWERED,
                 isLocked = false
             )
             return null
         }
+    }
+
+    /**
+     * Handles text answer submission in Practice Mode for Fill-in-the-blank questions.
+     * Locks the question immediately, evaluates answer, awards points if correct.
+     */
+    @Synchronized
+    fun submitTextAnswer(answerText: String): AnswerFeedback? {
+        val q = currentQuestion ?: return null
+        val qIndex = currentQuestionIndex
+        if (q.type != QuestionType.FILL_BLANK) return null
+
+        val currentState = questionStates[qIndex]
+        if (currentState?.isLocked == true || lockedState[qIndex] == true) {
+            return null // Already answered and locked
+        }
+
+        val trimmed = answerText.trim()
+        val isCorrect = AnswerComparison.isAnswerCorrect(trimmed, q.acceptedAnswers)
+        val answerState = if (isCorrect) AnswerState.CORRECT else AnswerState.INCORRECT
+        val pointsEarned = if (isCorrect) q.points else 0
+
+        userTextAnswers[qIndex] = trimmed
+        lockedState[qIndex] = true
+
+        questionStates[qIndex] = QuestionAnswerState(
+            isAnswered = true,
+            selectedOptionIndex = null,
+            userTextAnswer = trimmed,
+            answerState = answerState,
+            isLocked = true
+        )
+
+        if (isCorrect) {
+            score += pointsEarned
+            streak += 1
+        } else {
+            streak = 0
+        }
+
+        return AnswerFeedback(
+            isCorrect = isCorrect,
+            selectedOptionIndex = -1,
+            correctOptionIndex = -1,
+            streak = streak,
+            pointsEarned = pointsEarned,
+            explanation = q.explanation,
+            userTextAnswer = trimmed,
+            correctTextAnswer = q.fillBlankAnswer
+        )
+    }
+
+    /**
+     * Handles updating the typed text answer in Exam Mode for Fill-in-the-blank questions.
+     * Allows free editing and navigation without revealing feedback.
+     */
+    fun updateExamTextAnswer(answerText: String) {
+        if (isExamSubmitted) return
+        val q = currentQuestion ?: return
+        val qIndex = currentQuestionIndex
+        if (q.type != QuestionType.FILL_BLANK) return
+
+        userTextAnswers[qIndex] = answerText
+        val isAnswered = answerText.trim().isNotEmpty()
+
+        questionStates[qIndex] = QuestionAnswerState(
+            isAnswered = isAnswered,
+            selectedOptionIndex = null,
+            userTextAnswer = answerText,
+            answerState = AnswerState.UNANSWERED,
+            isLocked = false
+        )
     }
 
     fun nextQuestion(): Boolean {
@@ -296,9 +426,50 @@ class QuizEngine(
         var unansweredCount = 0
 
         val reviewItems = questions.mapIndexed { index, q ->
+            val isCorrect: Boolean
+            val isAnswered: Boolean
+            val userAnswerText: String?
+            val correctAnswerText: String
             val userSelected = selectedAnswers[index]
-            val isAnswered = userSelected != null
-            val isCorrect = isAnswered && userSelected == q.correctAnswerIndex
+
+            if (q.type == QuestionType.FILL_BLANK) {
+                val userText = userTextAnswers[index]?.trim()
+                isAnswered = !userText.isNullOrEmpty()
+                isCorrect = isAnswered && AnswerComparison.isAnswerCorrect(userText!!, q.acceptedAnswers)
+                userAnswerText = if (isAnswered) userText else null
+                correctAnswerText = q.fillBlankAnswer
+
+                // Reveal question state
+                questionStates[index] = QuestionAnswerState(
+                    isAnswered = isAnswered,
+                    selectedOptionIndex = null,
+                    userTextAnswer = userText,
+                    answerState = when {
+                        !isAnswered -> AnswerState.UNANSWERED
+                        isCorrect -> AnswerState.CORRECT
+                        else -> AnswerState.INCORRECT
+                    },
+                    isLocked = true
+                )
+            } else {
+                isAnswered = userSelected != null
+                isCorrect = isAnswered && userSelected == q.correctAnswerIndex
+                userAnswerText = userSelected?.let { q.options.getOrNull(it) }
+                correctAnswerText = q.options.getOrElse(q.correctAnswerIndex) { "" }
+
+                // Reveal question state
+                questionStates[index] = QuestionAnswerState(
+                    isAnswered = isAnswered,
+                    selectedOptionIndex = userSelected,
+                    userTextAnswer = null,
+                    answerState = when {
+                        !isAnswered -> AnswerState.UNANSWERED
+                        isCorrect -> AnswerState.CORRECT
+                        else -> AnswerState.INCORRECT
+                    },
+                    isLocked = true
+                )
+            }
 
             val pointsEarned = if (isCorrect) q.points else 0
             calculatedScore += pointsEarned
@@ -311,30 +482,20 @@ class QuizEngine(
                 wrongCount++
             }
 
-            // Reveal question states upon exam submission
-            questionStates[index] = QuestionAnswerState(
-                isAnswered = isAnswered,
-                selectedOptionIndex = userSelected,
-                answerState = when {
-                    !isAnswered -> AnswerState.UNANSWERED
-                    isCorrect -> AnswerState.CORRECT
-                    else -> AnswerState.INCORRECT
-                },
-                isLocked = true
-            )
-
             QuestionReviewItem(
                 questionNumber = index + 1,
                 questionText = q.questionText,
                 options = q.options,
-                userAnswerIndex = userSelected,
-                correctAnswerIndex = q.correctAnswerIndex,
-                userAnswerText = userSelected?.let { q.options.getOrNull(it) },
-                correctAnswerText = q.options[q.correctAnswerIndex],
+                userAnswerIndex = if (q.type == QuestionType.MCQ) userSelected else null,
+                correctAnswerIndex = if (q.type == QuestionType.MCQ) q.correctAnswerIndex else -1,
+                userAnswerText = userAnswerText,
+                correctAnswerText = correctAnswerText,
                 isCorrect = isCorrect,
                 pointsEarned = pointsEarned,
                 maxPoints = q.points,
-                explanation = q.explanation
+                explanation = q.explanation,
+                questionType = q.type,
+                acceptedAnswers = q.acceptedAnswers
             )
         }
 
@@ -378,7 +539,19 @@ class QuizEngine(
         }
 
         val answersObj = JSONObject()
-        selectedAnswers.forEach { (k, v) -> answersObj.put(k.toString(), v) }
+        questions.forEachIndexed { i, q ->
+            if (q.type == QuestionType.FILL_BLANK) {
+                val text = userTextAnswers[i]
+                if (!text.isNullOrBlank()) {
+                    answersObj.put(i.toString(), text)
+                }
+            } else {
+                val sel = selectedAnswers[i]
+                if (sel != null) {
+                    answersObj.put(i.toString(), sel)
+                }
+            }
+        }
 
         val lockedObj = JSONObject()
         lockedState.forEach { (k, v) -> lockedObj.put(k.toString(), v) }
