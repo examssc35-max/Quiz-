@@ -165,7 +165,7 @@ class QuizEngineTest {
         engine.nextQuestion()
         // Q2 left unanswered
 
-        val summary = engine.submitExam()
+        val summary = engine.submitExamSync()
         assertEquals(10, summary.score)
         assertEquals(20, summary.maxScore)
         assertEquals(1, summary.correctCount)
@@ -224,7 +224,7 @@ class QuizEngineTest {
         val examQ = examEngine.currentQuestion
         assertNotNull(examQ)
         examEngine.selectOption(examQ!!.correctAnswerIndex)
-        val examSummary = examEngine.submitExam()
+        val examSummary = examEngine.submitExamSync()
         assertTrue(examSummary.correctCount >= 1)
         assertTrue(examSummary.score > 0)
     }
@@ -439,7 +439,7 @@ class QuizEngineTest {
         assertEquals(0, engine.score)
 
         // Now submit
-        val summary = engine.submitExam()
+        val summary = engine.submitExamSync()
         assertEquals(5, summary.score)
         assertEquals(1, summary.correctCount)
         assertEquals(3, summary.reviewItems[0].userAnswerIndex)
@@ -469,7 +469,7 @@ class QuizEngineTest {
         engine.nextQuestion()
         // Q3 left unanswered
 
-        val summary = engine.submitExam()
+        val summary = engine.submitExamSync()
         assertEquals(4, summary.score)
         assertEquals(15, summary.maxScore)
         assertEquals(1, summary.correctCount)
@@ -722,7 +722,7 @@ class QuizEngineTest {
         engine.selectOption(1)
 
         // Submit Exam
-        val summary = engine.submitExam()
+        val summary = engine.submitExamSync()
         assertEquals(2, summary.totalQuestions)
         assertEquals(2, summary.correctCount)
         assertEquals(0, summary.wrongCount)
@@ -843,7 +843,7 @@ class QuizEngineTest {
         engine.selectOption(1)
 
         // Submit Exam
-        val summary = engine.submitExam()
+        val summary = engine.submitExamSync()
         assertEquals(2, summary.totalQuestions)
         // Q1 is treated as unanswered during scoring because its answer is not configured
         assertEquals(1, summary.correctCount)
@@ -1048,7 +1048,7 @@ class QuizEngineTest {
     }
 
     @Test
-    fun testAiEvaluation_exactMatchBypassesAi() = kotlinx.coroutines.runBlocking {
+    fun testAiEvaluation_evaluatesWithAiAndReturnsBanglaExplanation() = kotlinx.coroutines.runBlocking {
         var aiCalled = false
         val mockEvaluator = object : com.example.engine.AiAnswerEvaluator {
             override suspend fun evaluateAnswer(
@@ -1057,7 +1057,15 @@ class QuizEngineTest {
                 userAnswer: String
             ): Result<com.example.data.model.AiEvaluationResult> {
                 aiCalled = true
-                return Result.failure(IllegalStateException("AI should not be called on exact match"))
+                return Result.success(
+                    com.example.data.model.AiEvaluationResult(
+                        isCorrect = true,
+                        confidence = 0.99,
+                        matchedAnswer = "element",
+                        banglaExplanation = "তোমার উত্তরটি সঠিক। 'element' শব্দটি এই বাক্যে অর্থ ও grammar অনুযায়ী উপযুক্তভাবে বসে।",
+                        reason = "Exact match fitting correctly in sentence context"
+                    )
+                )
             }
         }
 
@@ -1083,8 +1091,12 @@ class QuizEngineTest {
         assertNotNull(feedback)
         assertTrue(feedback!!.isCorrect)
         assertEquals(5, engine.score)
-        assertFalse("AI evaluator must NOT be called on exact match", aiCalled)
+        assertTrue("AI evaluator must be called for every submitted answer in real time", aiCalled)
         assertNotNull(feedback.banglaExplanation)
+        assertEquals(
+            "তোমার উত্তরটি সঠিক। 'element' শব্দটি এই বাক্যে অর্থ ও grammar অনুযায়ী উপযুক্তভাবে বসে।",
+            feedback.banglaExplanation
+        )
     }
 
     @Test

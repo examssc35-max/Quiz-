@@ -32,8 +32,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -51,8 +53,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.audio.AppSoundManager
 import com.example.data.model.AnswerComparison
 import com.example.data.model.QuestionType
@@ -101,6 +106,8 @@ fun QuizPlayScreen(
     var showSubmitConfirmDialog by remember { mutableStateOf(false) }
     var showExitConfirmDialog by remember { mutableStateOf(false) }
     var showNavigatorSheet by remember { mutableStateOf(false) }
+    var isSubmittingExam by remember { mutableStateOf(false) }
+    var submitProgressStatus by remember { mutableStateOf("Analyzing answers with Gemini AI...") }
     val coroutineScope = rememberCoroutineScope()
 
     // Recomposition trigger on answer update
@@ -120,7 +127,11 @@ fun QuizPlayScreen(
             if (secondsLeft == 0) {
                 // Time's up!
                 soundManager.playWrongSound(soundEnabled)
-                val summary = engine.submitExam()
+                isSubmittingExam = true
+                val summary = engine.submitExam { cur, total ->
+                    submitProgressStatus = "Evaluating question $cur of $total with AI..."
+                }
+                isSubmittingExam = false
                 onQuizCompleted(summary)
             }
         }
@@ -559,8 +570,14 @@ fun QuizPlayScreen(
                             if (engine.mode == QuizMode.EXAM) {
                                 showSubmitConfirmDialog = true
                             } else {
-                                val summary = engine.submitExam()
-                                onQuizCompleted(summary)
+                                coroutineScope.launch {
+                                    isSubmittingExam = true
+                                    val summary = engine.submitExam { cur, total ->
+                                        submitProgressStatus = "Evaluating question $cur of $total..."
+                                    }
+                                    isSubmittingExam = false
+                                    onQuizCompleted(summary)
+                                }
                             }
                         },
                         trailingIcon = {
@@ -701,11 +718,63 @@ fun QuizPlayScreen(
                 confirmText = "Submit",
                 onConfirm = {
                     showSubmitConfirmDialog = false
-                    val summary = engine.submitExam()
-                    onQuizCompleted(summary)
+                    coroutineScope.launch {
+                        isSubmittingExam = true
+                        val summary = engine.submitExam { cur, total ->
+                            submitProgressStatus = "Evaluating question $cur of $total with Gemini AI..."
+                        }
+                        isSubmittingExam = false
+                        onQuizCompleted(summary)
+                    }
                 },
                 onDismiss = { showSubmitConfirmDialog = false }
             )
+        }
+
+        // Exam Evaluation in Progress Dialog
+        if (isSubmittingExam) {
+            Dialog(
+                onDismissRequest = { /* locked while submitting */ },
+                properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
+            ) {
+                GlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = AccentCyan,
+                            modifier = Modifier.size(44.dp),
+                            strokeWidth = 3.dp
+                        )
+                        Text(
+                            text = "Evaluating Answers",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = submitProgressStatus,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "Gemini AI is analyzing sentence context, grammar, and accepted answers in real time.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
         }
 
         // Exit / Save Progress Confirmation Dialog

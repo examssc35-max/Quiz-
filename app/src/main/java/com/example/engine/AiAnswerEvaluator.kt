@@ -11,6 +11,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 interface AiAnswerEvaluator {
@@ -22,8 +23,10 @@ interface AiAnswerEvaluator {
 }
 
 /**
- * Gemini-powered AI Answer Evaluator for fill-in-the-blank questions.
- * Adheres strictly to grammar, sentence context, part-of-speech, and anti-overcorrection rules.
+ * Real Gemini-powered AI Answer Evaluator for fill-in-the-blank questions.
+ * Analyzes sentence meaning, context, grammar, part of speech, tense, singular/plural,
+ * and whether the answer naturally replaces the blank.
+ * Includes in-memory caching to avoid redundant API calls for the same answer.
  */
 class GeminiAiAnswerEvaluator(
     private val apiKey: String = BuildConfig.GEMINI_API_KEY,
@@ -35,11 +38,14 @@ class GeminiAiAnswerEvaluator(
         private const val PRIMARY_MODEL = "gemini-2.5-flash"
         private const val FALLBACK_MODEL = "gemini-3.5-flash"
 
+        // In-memory cache across questions and sessions
+        private val evaluationCache = ConcurrentHashMap<String, AiEvaluationResult>()
+
         private val defaultClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(25, TimeUnit.SECONDS)
+                .readTimeout(25, TimeUnit.SECONDS)
+                .writeTimeout(25, TimeUnit.SECONDS)
                 .build()
         }
     }
@@ -49,13 +55,22 @@ class GeminiAiAnswerEvaluator(
         acceptedAnswers: List<String>,
         userAnswer: String
     ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
+        val trimmedAnswer = userAnswer.trim()
+        val cacheKey = generateCacheKey(questionText, acceptedAnswers, trimmedAnswer)
+
+        // Return cached result immediately if already evaluated
+        evaluationCache[cacheKey]?.let { cached ->
+            Log.d(TAG, "Returning cached evaluation for: $trimmedAnswer")
+            return@withContext Result.success(cached)
+        }
+
         if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
             Log.w(TAG, "Gemini API key is not configured")
             return@withContext Result.failure(IllegalStateException("Gemini API key is not configured"))
         }
 
         try {
-            val prompt = buildEvaluationPrompt(questionText, acceptedAnswers, userAnswer)
+            val prompt = buildEvaluationPrompt(questionText, acceptedAnswers, trimmedAnswer)
             val requestBodyJson = buildRequestBody(prompt)
 
             // Try primary model first, fallback to secondary if 404 or model not found
@@ -65,11 +80,24 @@ class GeminiAiAnswerEvaluator(
                 result = callGeminiModel(FALLBACK_MODEL, requestBodyJson, acceptedAnswers)
             }
 
+            if (result.isSuccess) {
+                val evaluated = result.getOrThrow()
+                evaluationCache[cacheKey] = evaluated
+            }
+
             result
         } catch (e: Exception) {
             Log.e(TAG, "Error evaluating answer with AI", e)
             Result.failure(e)
         }
+    }
+
+    private fun generateCacheKey(
+        questionText: String,
+        acceptedAnswers: List<String>,
+        userAnswer: String
+    ): String {
+        return "${questionText.trim().lowercase()}||${acceptedAnswers.joinToString(",").lowercase()}||${userAnswer.trim().lowercase()}"
     }
 
     private fun buildEvaluationPrompt(
@@ -80,40 +108,57 @@ class GeminiAiAnswerEvaluator(
         val acceptedListStr = acceptedAnswers.joinToString(", ") { "\"$it\"" }
         return """
             You are an expert English language and educational quiz evaluator with expertise in grammar, syntax, and semantics.
-            Your task is to evaluate a student's answer to a fill-in-the-blank question.
+            Your task is to evaluate a student's answer to a fill-in-the-blank question using the real English sentence context.
 
-            Question sentence: "$questionText"
-            Authoritative accepted answer(s): [$acceptedListStr]
-            Student submitted answer: "$userAnswer"
+            SENTENCE / QUESTION: "$questionText"
+            BLANK POSITION: Identify the blank in the sentence (typically marked by '______', '___', '[...]', or markers like '(a) —', '(b) —', '(c) —').
+            STORED ACCEPTED ANSWER(S): [$acceptedListStr]
+            STUDENT SUBMITTED ANSWER: "$userAnswer"
 
-            EVALUATION CRITERIA:
-            1. Analyze meaning, sentence context, grammar, part of speech, tense/form, singular/plural, and natural English usage.
-            2. If the user's answer is a genuinely valid, natural alternative that fits the exact sentence structure and retains the intended meaning, mark isCorrect: true.
-            3. DO NOT OVER-CORRECT:
-               - Do NOT accept vaguely related words.
-               - Do NOT accept words with different meanings or connotations.
-               - Do NOT accept grammatically incorrect forms (e.g. plural when singular is required, wrong tense, wrong part of speech).
-               - Do NOT accept words that alter the meaning of the sentence.
-               - When uncertain, mark isCorrect: false.
-            4. Bangla Explanation (MUST be in clear, simple, natural Bengali):
-               - If CORRECT:
-                 Tell why the answer is correct.
-                 If it is an alternative answer, explain why it is acceptable in this sentence.
-                 Example: "তোমার উত্তরটি সঠিক। এখানে ‘management’ শব্দটি বাক্যের অর্থ ও grammar অনুযায়ী ঠিকভাবে বসে।"
-               - If WRONG:
-                 Explain:
-                 1. Why the student's answer does not fit the sentence.
-                 2. Why the accepted answer fits.
-                 3. The relevant grammar or meaning in simple Bengali.
-                 Example: "তোমার উত্তর ‘elements’ এখানে ঠিক নয়, কারণ ‘the most important’ এর পরে এই বাক্যে singular noun দরকার। তাই ‘element’ সঠিক।"
+            CRITICAL EVALUATION RULES:
+            Judge the STUDENT'S ANSWER against the ACTUAL SENTENCE, not simply comparing two words.
+            The goal is: "Does this answer naturally, grammatically, and semantically correctly fit this exact blank in this exact sentence?"
 
-            Respond ONLY with valid JSON in this exact structure:
+            MUST ANALYZE:
+            1. Sentence meaning and whole sentence context
+            2. Grammar & syntax around the blank
+            3. Part of speech (noun, verb, adjective, adverb, preposition, etc.) required by the position
+            4. Tense and verb form (past, present, participle, gerund, etc.)
+            5. Singular / plural agreement (e.g. if the sentence requires a singular noun, a plural noun is WRONG)
+            6. Natural English usage and collocation
+            7. Meaning of the student's word in this context
+            8. Whether the user's answer can naturally replace the blank
+            9. Whether it is a genuinely valid alternative answer (e.g. if stored answer is "harm", and user writes "damage", and "damage" is valid in context, return isCorrect: true)
+            10. Do NOT accept a word merely because it is a synonym if it violates the grammar or alters the sentence meaning!
+                Example:
+                If sentence is "Air is the most important (a) — of human environment."
+                Stored: "element"
+                User: "elements"
+                -> MUST be marked isCorrect: false, because the sentence requires the singular form!
+
+            BANGLA EXPLANATION RULES (বাংলায় ব্যাখ্যা):
+            After every submission, generate a clear, natural, helpful Bangla explanation.
+            Do NOT give generic or lazy explanations such as "তোমার উত্তর সঠিক উত্তরের সাথে মেলেনি।"
+            The explanation must actually explain the sentence and grammatical context!
+
+            - If CORRECT:
+              Explain why the user's answer fits the sentence.
+              Example: "তোমার উত্তরটি সঠিক। 'damage' শব্দটি এই বাক্যে অর্থ ও grammar অনুযায়ী উপযুক্তভাবে বসে।"
+
+            - If WRONG:
+              Explain:
+              1. কেন user-এর উত্তরটি এই বাক্যে ভুল (যেমন: grammar, plural/singular, tense, বা অর্থের অমিল)
+              2. কেন accepted answer সঠিক
+              3. বাক্যের অর্থ ও grammar সহজ বাংলায় বুঝিয়ে দাও।
+              Example: "তোমার উত্তর ‘elements’ এখানে ঠিক নয়, কারণ ‘the most important’ এর পরে এই বাক্যে singular noun দরকার। তাই ‘element’ সঠিক।"
+
+            RESPOND ONLY WITH STRICT VALID JSON matching this exact structure:
             {
               "isCorrect": boolean,
               "confidence": number,
-              "reason": "Brief English rationale",
+              "matchedAnswer": "most relevant accepted answer or the valid word",
               "banglaExplanation": "বাংলায় সহজ ও স্পষ্ট ব্যাখ্যা",
-              "matchedAnswer": "most relevant accepted answer"
+              "reason": "Brief English rationale explaining the linguistic decision"
             }
         """.trimIndent()
     }
