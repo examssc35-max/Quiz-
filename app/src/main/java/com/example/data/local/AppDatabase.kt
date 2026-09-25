@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.local.dao.QuizAttemptDao
 import com.example.data.local.dao.QuizDao
 import com.example.data.local.dao.UnfinishedQuizDao
@@ -13,10 +12,6 @@ import com.example.data.local.entity.QuizEntity
 import com.example.data.local.entity.UnfinishedQuizEntity
 import com.example.data.model.QuizJsonParser
 import com.example.data.samples.SampleQuizzes
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import java.util.UUID
 
 @Database(
     entities = [QuizEntity::class, QuizAttemptEntity::class, UnfinishedQuizEntity::class],
@@ -35,24 +30,14 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+                INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "quiz_explore.db"
                 )
                     .fallbackToDestructiveMigration()
-                    .addCallback(object : Callback() {
-                        override fun onCreate(db: SupportSQLiteDatabase) {
-                            super.onCreate(db)
-                            // Seed default quizzes
-                            CoroutineScope(Dispatchers.IO).launch {
-                                populateInitialQuizzes(getInstance(context))
-                            }
-                        }
-                    })
                     .build()
-                INSTANCE = instance
-                instance
+                    .also { INSTANCE = it }
             }
         }
 

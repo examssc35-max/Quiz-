@@ -153,7 +153,7 @@ class QuizEngine(
                     type = QuestionType.MCQ,
                     questionText = q.question,
                     options = finalOptions,
-                    correctAnswerIndex = if (finalCorrectIndex >= 0) finalCorrectIndex else 0,
+                    correctAnswerIndex = finalCorrectIndex,
                     fillBlankAnswer = "",
                     acceptedAnswers = emptyList(),
                     points = q.points,
@@ -297,6 +297,29 @@ class QuizEngine(
             val currentState = questionStates[qIndex]
             if (currentState?.isLocked == true || lockedState[qIndex] == true) {
                 return null // Already answered and locked, ignore tap
+            }
+
+            if (!q.hasConfiguredAnswer || q.correctAnswerIndex !in q.options.indices) {
+                // Invalid or missing correct answer in question data
+                selectedAnswers[qIndex] = optionIndex
+                lockedState[qIndex] = true
+                questionStates[qIndex] = QuestionAnswerState(
+                    isAnswered = true,
+                    selectedOptionIndex = optionIndex,
+                    userTextAnswer = null,
+                    answerState = AnswerState.ANSWER_NOT_SET,
+                    isLocked = true
+                )
+                streak = 0
+                return AnswerFeedback(
+                    isCorrect = false,
+                    selectedOptionIndex = optionIndex,
+                    correctOptionIndex = -1,
+                    streak = 0,
+                    pointsEarned = 0,
+                    explanation = q.explanation ?: "Answer not configured",
+                    isAnswerNotSet = true
+                )
             }
 
             val isCorrect = (optionIndex == q.correctAnswerIndex)
@@ -733,7 +756,11 @@ class QuizEngine(
             val correctAnswerText: String
             val userSelected = selectedAnswers[index]
 
-            val isAnswerNotSet = (q.type == QuestionType.FILL_BLANK && !q.hasConfiguredAnswer)
+            val isAnswerNotSet = if (q.type == QuestionType.FILL_BLANK) {
+                !q.hasConfiguredAnswer
+            } else {
+                !q.hasConfiguredAnswer || q.correctAnswerIndex !in q.options.indices
+            }
             var banglaExpl: String? = null
             var aiEvalResult: AiEvaluationResult? = null
 
@@ -820,23 +847,38 @@ class QuizEngine(
                     )
                 }
             } else {
-                isAnswered = userSelected != null
-                isCorrect = isAnswered && userSelected == q.correctAnswerIndex
-                userAnswerText = userSelected?.let { q.options.getOrNull(it) }
-                correctAnswerText = q.options.getOrElse(q.correctAnswerIndex) { "" }
+                if (isAnswerNotSet) {
+                    isAnswered = userSelected != null
+                    isCorrect = false
+                    userAnswerText = userSelected?.let { q.options.getOrNull(it) }
+                    correctAnswerText = "Answer not configured"
 
-                // Reveal question state
-                questionStates[index] = QuestionAnswerState(
-                    isAnswered = isAnswered,
-                    selectedOptionIndex = userSelected,
-                    userTextAnswer = null,
-                    answerState = when {
-                        !isAnswered -> AnswerState.UNANSWERED
-                        isCorrect -> AnswerState.CORRECT
-                        else -> AnswerState.INCORRECT
-                    },
-                    isLocked = true
-                )
+                    questionStates[index] = QuestionAnswerState(
+                        isAnswered = isAnswered,
+                        selectedOptionIndex = userSelected,
+                        userTextAnswer = null,
+                        answerState = AnswerState.ANSWER_NOT_SET,
+                        isLocked = true
+                    )
+                } else {
+                    isAnswered = userSelected != null
+                    isCorrect = isAnswered && userSelected == q.correctAnswerIndex
+                    userAnswerText = userSelected?.let { q.options.getOrNull(it) }
+                    correctAnswerText = q.options.getOrElse(q.correctAnswerIndex) { "" }
+
+                    // Reveal question state
+                    questionStates[index] = QuestionAnswerState(
+                        isAnswered = isAnswered,
+                        selectedOptionIndex = userSelected,
+                        userTextAnswer = null,
+                        answerState = when {
+                            !isAnswered -> AnswerState.UNANSWERED
+                            isCorrect -> AnswerState.CORRECT
+                            else -> AnswerState.INCORRECT
+                        },
+                        isLocked = true
+                    )
+                }
             }
 
             val pointsEarned = if (isCorrect) q.points else 0
@@ -900,30 +942,28 @@ class QuizEngine(
     }
 
     /**
-     * Synchronous variant of submitExam using exact answer matching
+     * Suspend variant of submitExam using exact answer matching
      * without making asynchronous network calls (useful for testing or offline mode).
      */
-    fun submitExamSync(): QuizResultSummary {
-        return kotlinx.coroutines.runBlocking {
-            submitExam(customEvaluator = object : AiAnswerEvaluator {
-                override suspend fun evaluateAnswer(
-                    questionText: String,
-                    acceptedAnswers: List<String>,
-                    userAnswer: String
-                ): Result<AiEvaluationResult> {
-                    val correct = AnswerComparison.isAnswerCorrect(userAnswer, acceptedAnswers)
-                    return Result.success(
-                        AiEvaluationResult(
-                            isCorrect = correct,
-                            confidence = 1.0,
-                            reason = "Synchronous evaluation",
-                            banglaExplanation = if (correct) "সঠিক উত্তর" else "ভুল উত্তর",
-                            matchedAnswer = acceptedAnswers.firstOrNull() ?: ""
-                        )
+    suspend fun submitExamSync(): QuizResultSummary {
+        return submitExam(customEvaluator = object : AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<AiEvaluationResult> {
+                val correct = AnswerComparison.isAnswerCorrect(userAnswer, acceptedAnswers)
+                return Result.success(
+                    AiEvaluationResult(
+                        isCorrect = correct,
+                        confidence = 1.0,
+                        reason = "Synchronous evaluation",
+                        banglaExplanation = if (correct) "সঠিক উত্তর" else "ভুল উত্তর",
+                        matchedAnswer = acceptedAnswers.firstOrNull() ?: ""
                     )
-                }
-            })
-        }
+                )
+            }
+        })
     }
 
     fun toUnfinishedEntity(): UnfinishedQuizEntity {

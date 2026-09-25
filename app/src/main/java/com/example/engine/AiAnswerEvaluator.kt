@@ -75,8 +75,9 @@ class GeminiAiAnswerEvaluator(
 
             // Try primary model first, fallback to secondary if 404 or model not found
             var result = callGeminiModel(PRIMARY_MODEL, requestBodyJson, acceptedAnswers)
-            if (result.isFailure && result.exceptionOrNull()?.message?.contains("404") == true) {
-                Log.w(TAG, "Primary model 404, falling back to $FALLBACK_MODEL")
+            val primaryErrorMsg = result.exceptionOrNull()?.message.orEmpty()
+            if (result.isFailure && (primaryErrorMsg.contains("404") || primaryErrorMsg.contains("not found", ignoreCase = true))) {
+                Log.w(TAG, "Primary model unavailable, falling back to $FALLBACK_MODEL")
                 result = callGeminiModel(FALLBACK_MODEL, requestBodyJson, acceptedAnswers)
             }
 
@@ -87,8 +88,9 @@ class GeminiAiAnswerEvaluator(
 
             result
         } catch (e: Exception) {
-            Log.e(TAG, "Error evaluating answer with AI", e)
-            Result.failure(e)
+            val exMsg = e.message.orEmpty()
+            Log.e(TAG, "Error evaluating answer with AI: $exMsg", e)
+            Result.failure(Exception(if (exMsg.isBlank()) "Error evaluating answer with AI" else exMsg, e))
         }
     }
 
@@ -198,37 +200,47 @@ class GeminiAiAnswerEvaluator(
             .post(body)
             .build()
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: ""
-                Log.e(TAG, "Gemini API call failed ($modelName, ${response.code}): $errorBody")
-                return Result.failure(Exception("Gemini API error ${response.code}: $errorBody"))
-            }
-
-            val responseString = response.body?.string()
-                ?: return Result.failure(Exception("Empty response from Gemini API"))
-
-            return try {
-                val rootJson = JSONObject(responseString)
-                val candidates = rootJson.optJSONArray("candidates")
-                if (candidates == null || candidates.length() == 0) {
-                    return Result.failure(Exception("No candidates returned from Gemini"))
-                }
-                val content = candidates.getJSONObject(0).optJSONObject("content")
-                val parts = content?.optJSONArray("parts")
-                val text = parts?.optJSONObject(0)?.optString("text")
-
-                if (text.isNullOrBlank()) {
-                    return Result.failure(Exception("No text in candidate content"))
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string().orEmpty()
+                    Log.e(TAG, "Gemini API call failed ($modelName, ${response.code}): $errorBody")
+                    val failureDetail = if (errorBody.isNotBlank()) errorBody else "HTTP error ${response.code}"
+                    return Result.failure(Exception("Gemini API error ${response.code}: $failureDetail"))
                 }
 
-                val fallbackAnswer = acceptedAnswers.firstOrNull() ?: ""
-                val evaluationResult = AiEvaluationResult.fromJson(text, fallbackAnswer)
-                Result.success(evaluationResult)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse Gemini output JSON", e)
-                Result.failure(e)
+                val responseString = response.body?.string().orEmpty()
+                if (responseString.isBlank()) {
+                    return Result.failure(Exception("Empty response from Gemini API"))
+                }
+
+                return try {
+                    val rootJson = JSONObject(responseString)
+                    val candidates = rootJson.optJSONArray("candidates")
+                    if (candidates == null || candidates.length() == 0) {
+                        return Result.failure(Exception("No candidates returned from Gemini"))
+                    }
+                    val content = candidates.getJSONObject(0).optJSONObject("content")
+                    val parts = content?.optJSONArray("parts")
+                    val text = parts?.optJSONObject(0)?.optString("text").orEmpty()
+
+                    if (text.isBlank()) {
+                        return Result.failure(Exception("No text in candidate content"))
+                    }
+
+                    val fallbackAnswer = acceptedAnswers.firstOrNull().orEmpty()
+                    val evaluationResult = AiEvaluationResult.fromJson(text, fallbackAnswer)
+                    Result.success(evaluationResult)
+                } catch (e: Exception) {
+                    val parseMsg = e.message.orEmpty()
+                    Log.e(TAG, "Failed to parse Gemini output JSON: $parseMsg", e)
+                    Result.failure(Exception(if (parseMsg.isBlank()) "Failed to parse Gemini output JSON" else parseMsg, e))
+                }
             }
+        } catch (e: Exception) {
+            val netMsg = e.message.orEmpty()
+            Log.e(TAG, "Network error during Gemini API call ($modelName): $netMsg", e)
+            return Result.failure(Exception(if (netMsg.isBlank()) "Network error connecting to Gemini API" else netMsg, e))
         }
     }
 }

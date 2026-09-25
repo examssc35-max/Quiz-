@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -81,8 +82,21 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
     val vibrationEnabled by viewModel.appSettings.vibrationEnabled.collectAsState()
     val showExplanations by viewModel.appSettings.showExplanations.collectAsState()
     val blurIntensity by viewModel.appSettings.blurIntensity.collectAsState()
+    val operationState by viewModel.operationState.collectAsState()
 
     val context = LocalContext.current
+
+    // Display user-friendly notification for repository operations
+    LaunchedEffect(operationState) {
+        operationState.errorMessage?.let { msg ->
+            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+            viewModel.clearOperationState()
+        }
+        operationState.successMessage?.let { msg ->
+            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+            viewModel.clearOperationState()
+        }
+    }
 
     // Handle system back navigation
     BackHandler(enabled = currentScreen !is Screen.Home) {

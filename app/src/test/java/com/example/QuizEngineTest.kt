@@ -137,7 +137,7 @@ class QuizEngineTest {
     }
 
     @Test
-    fun testExamMode_submissionAndReview() {
+    fun testExamMode_submissionAndReview() = kotlinx.coroutines.runBlocking {
         val schema = QuizSchema(
             title = "Exam Test",
             description = "",
@@ -194,7 +194,7 @@ class QuizEngineTest {
     }
 
     @Test
-    fun testBanglaJson_fileParsingAndEngineExecution() {
+    fun testBanglaJson_fileParsingAndEngineExecution() = kotlinx.coroutines.runBlocking {
         val file = java.io.File("/MT2/bangla.json")
         val jsonContent = if (file.exists()) {
             file.readText(Charsets.UTF_8)
@@ -406,7 +406,7 @@ class QuizEngineTest {
     }
 
     @Test
-    fun testScenario5_ExamChangeAnswer_SelectionUpdatesNoValidationUntilSubmit() {
+    fun testScenario5_ExamChangeAnswer_SelectionUpdatesNoValidationUntilSubmit() = kotlinx.coroutines.runBlocking {
         val schema = QuizSchema(
             title = "Test 5 Exam Change Answer",
             description = "",
@@ -446,7 +446,7 @@ class QuizEngineTest {
     }
 
     @Test
-    fun testScenario6_ExamSubmit_AllAnswersValidatedAndRevealed() {
+    fun testScenario6_ExamSubmit_AllAnswersValidatedAndRevealed() = kotlinx.coroutines.runBlocking {
         val schema = QuizSchema(
             title = "Test 6 Exam Submit",
             description = "",
@@ -683,7 +683,7 @@ class QuizEngineTest {
     }
 
     @Test
-    fun testFillBlank_ExamMode_EditableAndSubmittedCorrectly() {
+    fun testFillBlank_ExamMode_EditableAndSubmittedCorrectly() = kotlinx.coroutines.runBlocking {
         val schema = QuizSchema(
             title = "Fill Blank Exam",
             questions = listOf(
@@ -809,7 +809,7 @@ class QuizEngineTest {
     }
 
     @Test
-    fun testFillBlank_emptyAnswer_examMode_treatedAsUnansweredInScoring() {
+    fun testFillBlank_emptyAnswer_examMode_treatedAsUnansweredInScoring() = kotlinx.coroutines.runBlocking {
         val schema = QuizSchema(
             title = "Empty Answer Exam",
             questions = listOf(
@@ -1287,6 +1287,131 @@ class QuizEngineTest {
         // Second submission should be blocked because the question is locked
         val secondFeedback = engine.submitPracticeFillBlankAnswer("liquid")
         assertEquals(null, secondFeedback)
+    }
+
+    @Test
+    fun testMcq_shuffleOptionsFalse_preservesExactIndex() {
+        val schema = QuizSchema(
+            title = "Unshuffled MCQ",
+            shuffleQuestions = false,
+            shuffleOptions = false,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q1",
+                    question = "Index 0 is correct",
+                    options = listOf("CorrectZero", "WrongOne", "WrongTwo"),
+                    answer = 0,
+                    points = 5
+                ),
+                QuestionSchema(
+                    id = "q2",
+                    question = "Last index is correct",
+                    options = listOf("WrongZero", "WrongOne", "CorrectLast"),
+                    answer = 2,
+                    points = 5
+                )
+            )
+        )
+
+        val engine = QuizEngine("unshuffled", schema, QuizMode.PRACTICE)
+        assertEquals(0, engine.questions[0].correctAnswerIndex)
+        assertEquals(2, engine.questions[1].correctAnswerIndex)
+
+        // Select correct for Q1
+        val feedback1 = engine.selectOption(0)
+        assertNotNull(feedback1)
+        assertTrue(feedback1!!.isCorrect)
+        assertEquals(5, engine.score)
+
+        // Move to Q2 and select correct for Q2
+        assertTrue(engine.nextQuestion())
+        val feedback2 = engine.selectOption(2)
+        assertNotNull(feedback2)
+        assertTrue(feedback2!!.isCorrect)
+        assertEquals(10, engine.score)
+    }
+
+    @Test
+    fun testMcq_shuffleOptionsTrue_preservesAnswerTextAcrossIndices() {
+        val schema = QuizSchema(
+            title = "Shuffled MCQ",
+            shuffleQuestions = false,
+            shuffleOptions = true,
+            questions = listOf(
+                QuestionSchema(
+                    id = "q_first",
+                    question = "Correct was at index 0",
+                    options = listOf("TargetZero", "B", "C", "D"),
+                    answer = 0,
+                    points = 5
+                ),
+                QuestionSchema(
+                    id = "q_last",
+                    question = "Correct was at last index",
+                    options = listOf("W1", "W2", "W3", "TargetLast"),
+                    answer = 3,
+                    points = 5
+                )
+            )
+        )
+
+        repeat(20) {
+            val engine = QuizEngine("shuffled_repeat", schema, QuizMode.PRACTICE)
+            val qFirst = engine.questions[0]
+            val qLast = engine.questions[1]
+
+            assertTrue(qFirst.correctAnswerIndex in 0..3)
+            assertEquals("TargetZero", qFirst.options[qFirst.correctAnswerIndex])
+
+            assertTrue(qLast.correctAnswerIndex in 0..3)
+            assertEquals("TargetLast", qLast.options[qLast.correctAnswerIndex])
+
+            // Verify selecting correct option yields isCorrect = true
+            val fbFirst = engine.selectOption(qFirst.correctAnswerIndex)
+            assertNotNull(fbFirst)
+            assertTrue(fbFirst!!.isCorrect)
+        }
+    }
+
+    @Test
+    fun testMcq_invalidAnswerIndex_neverFallsBackToOptionZero() = kotlinx.coroutines.runBlocking {
+        // Construct question with invalid answer index (out of bounds)
+        val schema = QuizSchema(
+            title = "Invalid Answer Quiz",
+            questions = listOf(
+                QuestionSchema(
+                    id = "q_invalid",
+                    type = com.example.data.model.QuestionType.MCQ,
+                    question = "What has no valid answer?",
+                    options = listOf("Option 0", "Option 1", "Option 2"),
+                    answer = 99, // Out of bounds!
+                    points = 5
+                )
+            )
+        )
+
+        val engine = QuizEngine("invalid_engine", schema, QuizMode.PRACTICE)
+        val q = engine.questions[0]
+        assertEquals(-1, q.correctAnswerIndex)
+        assertFalse(q.hasConfiguredAnswer)
+
+        // User picks Option 0: must NOT be awarded points or marked correct!
+        val feedback = engine.selectOption(0)
+        assertNotNull(feedback)
+        assertFalse(feedback!!.isCorrect)
+        assertTrue(feedback.isAnswerNotSet)
+        assertEquals(0, feedback.pointsEarned)
+        assertEquals(0, engine.score)
+
+        // In Exam mode: submitExamSync must treat invalid question safely
+        val examEngine = QuizEngine("invalid_exam", schema, QuizMode.EXAM)
+        examEngine.selectOption(0)
+        val summary = examEngine.submitExamSync()
+        assertEquals(0, summary.score)
+        assertEquals(0, summary.correctCount)
+        assertEquals(1, summary.unansweredCount)
+        assertTrue(summary.reviewItems[0].isAnswerNotSet)
+        assertFalse(summary.reviewItems[0].isCorrect)
     }
 }
 

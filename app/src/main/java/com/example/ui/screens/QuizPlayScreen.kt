@@ -65,7 +65,6 @@ import com.example.data.model.QuizMode
 import com.example.data.model.QuizResultSummary
 import com.example.engine.AnswerState
 import com.example.engine.QuizEngine
-import kotlinx.coroutines.launch
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassConfirmDialog
 import com.example.ui.components.GlassFillBlankInput
@@ -118,6 +117,24 @@ fun QuizPlayScreen(
             engine.quizSchema.title.contains("বাংলাদেশ") ||
             engine.quizSchema.questions.firstOrNull()?.question?.any { it in '\u0980'..'\u09FF' } == true
 
+    val performExamSubmission: () -> Unit = {
+        if (!isSubmittingExam) {
+            isSubmittingExam = true
+            coroutineScope.launch {
+                try {
+                    val summary = engine.submitExam { cur, total ->
+                        submitProgressStatus = "Evaluating question $cur of $total with Gemini AI..."
+                    }
+                    onQuizCompleted(summary)
+                } catch (e: Exception) {
+                    android.util.Log.e("QuizPlayScreen", "Error submitting exam: ${e.message.orEmpty()}", e)
+                } finally {
+                    isSubmittingExam = false
+                }
+            }
+        }
+    }
+
     // Timer countdown effect
     LaunchedEffect(hasTimer, secondsLeft) {
         if (hasTimer && secondsLeft > 0) {
@@ -127,12 +144,7 @@ fun QuizPlayScreen(
             if (secondsLeft == 0) {
                 // Time's up!
                 soundManager.playWrongSound(soundEnabled)
-                isSubmittingExam = true
-                val summary = engine.submitExam { cur, total ->
-                    submitProgressStatus = "Evaluating question $cur of $total with AI..."
-                }
-                isSubmittingExam = false
-                onQuizCompleted(summary)
+                performExamSubmission()
             }
         }
     }
@@ -570,14 +582,7 @@ fun QuizPlayScreen(
                             if (engine.mode == QuizMode.EXAM) {
                                 showSubmitConfirmDialog = true
                             } else {
-                                coroutineScope.launch {
-                                    isSubmittingExam = true
-                                    val summary = engine.submitExam { cur, total ->
-                                        submitProgressStatus = "Evaluating question $cur of $total..."
-                                    }
-                                    isSubmittingExam = false
-                                    onQuizCompleted(summary)
-                                }
+                                performExamSubmission()
                             }
                         },
                         trailingIcon = {
@@ -718,14 +723,7 @@ fun QuizPlayScreen(
                 confirmText = "Submit",
                 onConfirm = {
                     showSubmitConfirmDialog = false
-                    coroutineScope.launch {
-                        isSubmittingExam = true
-                        val summary = engine.submitExam { cur, total ->
-                            submitProgressStatus = "Evaluating question $cur of $total with Gemini AI..."
-                        }
-                        isSubmittingExam = false
-                        onQuizCompleted(summary)
-                    }
+                    performExamSubmission()
                 },
                 onDismiss = { showSubmitConfirmDialog = false }
             )

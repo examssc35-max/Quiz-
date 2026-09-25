@@ -58,6 +58,13 @@ class QuizAppViewModel(
     private val _quizFilter = MutableStateFlow<String?>(null)
     val quizFilter: StateFlow<String?> = _quizFilter.asStateFlow()
 
+    private val _operationState = MutableStateFlow(QuizOperationState())
+    val operationState: StateFlow<QuizOperationState> = _operationState.asStateFlow()
+
+    fun clearOperationState() {
+        _operationState.value = QuizOperationState()
+    }
+
     init {
         viewModelScope.launch {
             repository.ensureSeeded()
@@ -139,13 +146,39 @@ class QuizAppViewModel(
 
     fun duplicateQuiz(quizId: String) {
         viewModelScope.launch {
-            repository.duplicateQuiz(quizId)
+            _operationState.value = QuizOperationState(isLoading = true)
+            try {
+                val newId = repository.duplicateQuiz(quizId)
+                _operationState.value = QuizOperationState(
+                    isLoading = false,
+                    successMessage = "Quiz duplicated successfully"
+                )
+            } catch (e: Exception) {
+                val errorMsg = e.message.orEmpty().ifBlank { "Failed to duplicate quiz" }
+                _operationState.value = QuizOperationState(
+                    isLoading = false,
+                    errorMessage = errorMsg
+                )
+            }
         }
     }
 
     fun deleteQuiz(quizId: String) {
         viewModelScope.launch {
-            repository.deleteQuiz(quizId)
+            _operationState.value = QuizOperationState(isLoading = true)
+            try {
+                repository.deleteQuiz(quizId)
+                _operationState.value = QuizOperationState(
+                    isLoading = false,
+                    successMessage = "Quiz deleted successfully"
+                )
+            } catch (e: Exception) {
+                val errorMsg = e.message.orEmpty().ifBlank { "Failed to delete quiz" }
+                _operationState.value = QuizOperationState(
+                    isLoading = false,
+                    errorMessage = errorMsg
+                )
+            }
         }
     }
 
@@ -206,3 +239,9 @@ class QuizAppViewModelFactory(
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
+
+data class QuizOperationState(
+    val isLoading: Boolean = false,
+    val successMessage: String? = null,
+    val errorMessage: String? = null
+)

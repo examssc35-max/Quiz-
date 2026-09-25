@@ -68,7 +68,7 @@ class QuizRepository(private val database: AppDatabase) {
             title = "${parsed.title} (Copy)",
             questions = parsed.questions.map { it.copy(id = UUID.randomUUID().toString().take(8)) }
         )
-        insertOrUpdateQuiz(duplicatedSchema)
+        return@withContext insertOrUpdateQuiz(duplicatedSchema)
     }
 
     suspend fun deleteQuiz(quizId: String) = withContext(Dispatchers.IO) {
