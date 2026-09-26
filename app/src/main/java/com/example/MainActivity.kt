@@ -52,9 +52,10 @@ class MainActivity : ComponentActivity() {
             val repository = QuizRepository.getInstance(context)
             val appSettings = AppSettings.getInstance(context)
             val soundManager = AppSoundManager(context)
+            val aiManager = com.example.ai.AIManager.getInstance(context)
 
             val viewModel: QuizAppViewModel = viewModel(
-                factory = QuizAppViewModelFactory(repository, appSettings, soundManager)
+                factory = QuizAppViewModelFactory(repository, appSettings, soundManager, aiManager)
             )
 
             MyApplicationTheme {
@@ -143,6 +144,9 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
             }
             is Screen.QuizEditor -> {
                 viewModel.navigateTo(Screen.Quizzes)
+            }
+            is Screen.AiSettings -> {
+                viewModel.navigateTo(Screen.Settings)
             }
             else -> viewModel.navigateTo(Screen.Home)
         }
@@ -289,7 +293,14 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                         blurIntensity = blurIntensity,
                         onResetStats = { viewModel.resetStatistics() },
                         onRestoreDefaultQuizzes = { viewModel.restoreSampleQuizzes() },
-                        onClearUnfinished = { viewModel.clearUnfinished() }
+                        onClearUnfinished = { viewModel.clearUnfinished() },
+                        onNavigateToAiSettings = { viewModel.navigateTo(Screen.AiSettings) }
+                    )
+                }
+                is Screen.AiSettings -> {
+                    com.example.ui.screens.AiSettingsScreen(
+                        aiManager = viewModel.aiManager,
+                        onBackClick = { viewModel.navigateTo(Screen.Settings) }
                     )
                 }
             }

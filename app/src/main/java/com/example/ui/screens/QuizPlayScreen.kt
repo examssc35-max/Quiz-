@@ -100,22 +100,22 @@ fun QuizPlayScreen(
     onExitQuiz: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var currentQIndex by remember { mutableIntStateOf(engine.currentQuestionIndex) }
-    var secondsLeft by remember { mutableIntStateOf(engine.timeRemainingSeconds) }
     var showSubmitConfirmDialog by remember { mutableStateOf(false) }
     var showExitConfirmDialog by remember { mutableStateOf(false) }
     var showNavigatorSheet by remember { mutableStateOf(false) }
     var isSubmittingExam by remember { mutableStateOf(false) }
-    var submitProgressStatus by remember { mutableStateOf("Analyzing answers with Gemini AI...") }
+    var submitProgressStatus by remember { mutableStateOf("Analyzing answers with AI...") }
     val coroutineScope = rememberCoroutineScope()
 
     // Recomposition trigger on answer update
     var answersVersion by remember { mutableIntStateOf(0) }
 
     val hasTimer = engine.quizSchema.timeLimit > 0
-    val isBengali = engine.quizSchema.category.contains("বাংলাদেশ") ||
-            engine.quizSchema.title.contains("বাংলাদেশ") ||
-            engine.quizSchema.questions.firstOrNull()?.question?.any { it in '\u0980'..'\u09FF' } == true
+    val isBengali = remember(engine.quizSchema) {
+        engine.quizSchema.category.contains("বাংলাদেশ") ||
+                engine.quizSchema.title.contains("বাংলাদেশ") ||
+                engine.quizSchema.questions.firstOrNull()?.question?.any { it in '\u0980'..'\u09FF' } == true
+    }
 
     val performExamSubmission: () -> Unit = {
         if (!isSubmittingExam) {
@@ -123,7 +123,7 @@ fun QuizPlayScreen(
             coroutineScope.launch {
                 try {
                     val summary = engine.submitExam { cur, total ->
-                        submitProgressStatus = "Evaluating question $cur of $total with Gemini AI..."
+                        submitProgressStatus = "Evaluating question $cur of $total with AI..."
                     }
                     onQuizCompleted(summary)
                 } catch (e: Exception) {
@@ -135,20 +135,24 @@ fun QuizPlayScreen(
         }
     }
 
-    // Timer countdown effect
-    LaunchedEffect(hasTimer, secondsLeft) {
-        if (hasTimer && secondsLeft > 0) {
-            delay(1000L)
-            secondsLeft -= 1
-            engine.updateTimer(secondsLeft)
-            if (secondsLeft == 0) {
-                // Time's up!
-                soundManager.playWrongSound(soundEnabled)
-                performExamSubmission()
+    // Accurate timer countdown loop without restarting coroutine every second
+    LaunchedEffect(hasTimer) {
+        if (hasTimer && engine.timeRemainingSeconds > 0) {
+            while (engine.timeRemainingSeconds > 0) {
+                delay(1000L)
+                val newSeconds = engine.timeRemainingSeconds - 1
+                engine.updateTimer(newSeconds)
+                if (newSeconds == 0) {
+                    soundManager.playWrongSound(soundEnabled)
+                    performExamSubmission()
+                    break
+                }
             }
         }
     }
 
+    val currentQIndex = engine.currentQuestionIndex
+    val secondsLeft = engine.timeRemainingSeconds
     val currentQ = engine.currentQuestion
     val isAnswered = engine.isCurrentQuestionAnswered
     val isLocked = engine.isCurrentQuestionLocked
@@ -524,7 +528,6 @@ fun QuizPlayScreen(
                     borderBrush = GlassBorderBrush,
                     onClick = {
                         if (engine.previousQuestion()) {
-                            currentQIndex = engine.currentQuestionIndex
                             soundManager.playClickSound(soundEnabled)
                         }
                     }
@@ -599,7 +602,6 @@ fun QuizPlayScreen(
                         text = "Next",
                         onClick = {
                             if (engine.nextQuestion()) {
-                                currentQIndex = engine.currentQuestionIndex
                                 soundManager.playClickSound(soundEnabled)
                             }
                         },
@@ -675,7 +677,6 @@ fun QuizPlayScreen(
                                     )
                                     .clickable {
                                         engine.jumpToQuestion(qIdx)
-                                        currentQIndex = qIdx
                                         showNavigatorSheet = false
                                     },
                                 contentAlignment = Alignment.Center

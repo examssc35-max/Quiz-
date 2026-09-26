@@ -19,4 +19,5 @@ sealed class Screen {
     data class QuizEditor(val existingQuizId: String? = null) : Screen()
     object Statistics : Screen()
     object Settings : Screen()
+    object AiSettings : Screen()
 }

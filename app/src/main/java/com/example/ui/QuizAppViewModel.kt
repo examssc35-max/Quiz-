@@ -28,7 +28,8 @@ import kotlinx.coroutines.launch
 class QuizAppViewModel(
     val repository: QuizRepository,
     val appSettings: AppSettings,
-    val soundManager: AppSoundManager
+    val soundManager: AppSoundManager,
+    val aiManager: com.example.ai.AIManager = com.example.ai.AIManager.defaultManager
 ) : ViewModel() {
 
     val allQuizzes: StateFlow<List<QuizEntity>> = repository.allQuizzes
@@ -109,12 +110,12 @@ class QuizAppViewModel(
             val engine = if (resume) {
                 val unfinished = repository.getUnfinishedQuiz(quizId)
                 if (unfinished != null) {
-                    QuizEngine(quizId, schema, unfinished)
+                    QuizEngine(quizId, schema, unfinished, aiEvaluator = aiManager)
                 } else {
-                    QuizEngine(quizId, schema, mode)
+                    QuizEngine(quizId, schema, mode, aiEvaluator = aiManager)
                 }
             } else {
-                QuizEngine(quizId, schema, mode)
+                QuizEngine(quizId, schema, mode, aiEvaluator = aiManager)
             }
 
             _activeEngine.value = engine
@@ -229,12 +230,13 @@ class QuizAppViewModel(
 class QuizAppViewModelFactory(
     private val repository: QuizRepository,
     private val appSettings: AppSettings,
-    private val soundManager: AppSoundManager
+    private val soundManager: AppSoundManager,
+    private val aiManager: com.example.ai.AIManager = com.example.ai.AIManager.defaultManager
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(QuizAppViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return QuizAppViewModel(repository, appSettings, soundManager) as T
+            return QuizAppViewModel(repository, appSettings, soundManager, aiManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

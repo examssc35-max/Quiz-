@@ -75,7 +75,7 @@ class QuizEngine(
     val quizId: String,
     val quizSchema: QuizSchema,
     val mode: QuizMode,
-    val aiEvaluator: AiAnswerEvaluator = GeminiAiAnswerEvaluator()
+    val aiEvaluator: AiAnswerEvaluator = com.example.ai.AIManager.defaultManager
 ) {
     val questions: List<ActiveQuestion>
     val totalQuestions: Int
@@ -175,11 +175,13 @@ class QuizEngine(
     constructor(
         quizId: String,
         quizSchema: QuizSchema,
-        unfinished: UnfinishedQuizEntity
+        unfinished: UnfinishedQuizEntity,
+        aiEvaluator: AiAnswerEvaluator = com.example.ai.AIManager.defaultManager
     ) : this(
         quizId = quizId,
         quizSchema = quizSchema,
-        mode = if (unfinished.mode == QuizMode.EXAM.name) QuizMode.EXAM else QuizMode.PRACTICE
+        mode = if (unfinished.mode == QuizMode.EXAM.name) QuizMode.EXAM else QuizMode.PRACTICE,
+        aiEvaluator = aiEvaluator
     ) {
         // Reconstruct exact state
         try {

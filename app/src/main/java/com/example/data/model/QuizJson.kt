@@ -26,11 +26,13 @@ object AnswerComparison {
     }
 
     fun isAnswerCorrect(userAnswer: String, acceptedAnswers: List<String>): Boolean {
-        val normalizedUser = normalize(userAnswer)
-        if (normalizedUser.isEmpty()) return false
-        return acceptedAnswers.any { accepted ->
-            normalize(accepted) == normalizedUser
+        val trimmed = userAnswer.trim()
+        if (trimmed.isEmpty()) return false
+        val normalizedUser = normalize(trimmed)
+        if (acceptedAnswers.any { normalize(it) == normalizedUser }) {
+            return true
         }
+        return com.example.ai.SmartNormalizer.isEquivalentlyNormalized(trimmed, acceptedAnswers)
     }
 }
 

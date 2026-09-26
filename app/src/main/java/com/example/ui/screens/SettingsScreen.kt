@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
@@ -61,6 +62,7 @@ fun SettingsScreen(
     onResetStats: () -> Unit,
     onRestoreDefaultQuizzes: () -> Unit,
     onClearUnfinished: () -> Unit,
+    onNavigateToAiSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showResetStatsDialog by remember { mutableStateOf(false) }
@@ -82,6 +84,16 @@ fun SettingsScreen(
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold
         )
+
+        // Section 0: AI Evaluation Engine
+        SettingsSection(title = "AI Evaluation Engine") {
+            SettingsActionRow(
+                icon = Icons.Default.AutoAwesome,
+                title = "AI Settings",
+                subtitle = "Configure Gemini, OpenAI, Claude, OpenRouter, or Custom API",
+                onClick = onNavigateToAiSettings
+            )
+        }
 
         // Section 1: Audio & Appreciation matching screen 8
         SettingsSection(title = "Audio & Feedback") {
