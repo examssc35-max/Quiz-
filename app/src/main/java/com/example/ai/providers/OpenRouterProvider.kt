@@ -95,6 +95,7 @@ class OpenRouterProvider(
         val requestJson = JSONObject().apply {
             put("model", model)
             put("max_tokens", 5)
+            put("stream", false)
             val messages = JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "user")
@@ -104,7 +105,7 @@ class OpenRouterProvider(
             put("messages", messages)
         }
 
-        val url = "$baseUrl/chat/completions"
+        val url = com.example.ai.ChatUrlNormalizer.normalize(config.effectiveBaseUrl)
         val httpRequest = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer $apiKey")
@@ -164,9 +165,10 @@ class OpenRouterProvider(
                 })
             }
             put("messages", messages)
+            put("stream", false)
         }
 
-        val url = "$baseUrl/chat/completions"
+        val url = com.example.ai.ChatUrlNormalizer.normalize(config.effectiveBaseUrl)
         val httpRequest = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer $apiKey")

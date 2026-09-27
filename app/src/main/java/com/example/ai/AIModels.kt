@@ -51,10 +51,29 @@ enum class AIProviderType(
     OPENAI_COMPATIBLE(
         id = "openai_compatible",
         displayName = "OpenAI Compatible",
-        defaultModel = "gpt-4o-mini",
-        defaultBaseUrl = "https://api.groq.com/openai/v1/",
+        defaultModel = "openai/gpt-oss-120b:groq",
+        defaultBaseUrl = "https://router.huggingface.co/v1",
         requiresBaseUrl = true,
-        popularModels = listOf("llama-3.3-70b-versatile", "mistral-small-latest", "gpt-4o-mini")
+        popularModels = listOf(
+            "openai/gpt-oss-120b:groq",
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
+            "llama-3.3-70b-versatile",
+            "gpt-4o-mini"
+        )
+    ),
+    HUGGING_FACE(
+        id = "huggingface",
+        displayName = "Hugging Face",
+        defaultModel = "openai/gpt-oss-120b:groq",
+        defaultBaseUrl = "https://router.huggingface.co/v1",
+        requiresBaseUrl = true,
+        popularModels = listOf(
+            "openai/gpt-oss-120b:groq",
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "Qwen/Qwen2.5-72B-Instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3"
+        )
     ),
     CUSTOM(
         id = "custom",
@@ -67,7 +86,10 @@ enum class AIProviderType(
 
     companion object {
         fun fromId(id: String?): AIProviderType {
-            return entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: GEMINI
+            val clean = id?.trim()?.lowercase() ?: ""
+            if (clean == "huggingface" || clean == "hf") return HUGGING_FACE
+            if (clean == "openai_compatible" || clean == "openai-compatible") return OPENAI_COMPATIBLE
+            return entries.firstOrNull { it.id.equals(clean, ignoreCase = true) } ?: GEMINI
         }
     }
 }

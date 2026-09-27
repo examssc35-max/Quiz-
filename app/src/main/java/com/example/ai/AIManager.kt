@@ -54,6 +54,7 @@ class AIManager(
         AIProviderType.ANTHROPIC to AnthropicProvider(),
         AIProviderType.OPENROUTER to OpenRouterProvider(),
         AIProviderType.OPENAI_COMPATIBLE to OpenAICompatibleProvider(),
+        AIProviderType.HUGGING_FACE to OpenAICompatibleProvider(),
         AIProviderType.CUSTOM to CustomApiProvider()
     )
 

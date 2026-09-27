@@ -84,18 +84,26 @@ class CustomApiProvider(
     }
 
     override suspend fun testConnection(config: AIConfig): Result<String> = withContext(Dispatchers.IO) {
-        val endpointUrl = config.effectiveBaseUrl.trim()
+        val endpointUrl = if (config.effectiveBaseUrl.endsWith("/v1", ignoreCase = true) || config.effectiveBaseUrl.contains("huggingface", ignoreCase = true)) {
+            com.example.ai.ChatUrlNormalizer.normalize(config.effectiveBaseUrl)
+        } else {
+            config.effectiveBaseUrl.trim()
+        }
         if (endpointUrl.isBlank()) {
             return@withContext Result.failure(IllegalStateException("Endpoint URL is required."))
         }
 
         val requestJson = JSONObject().apply {
             put("model", config.effectiveModel)
-            put("test", true)
+            put("stream", false)
             put("messages", JSONArray().apply {
                 put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", "You are the Quiz Explore AI Agent.")
+                })
+                put(JSONObject().apply {
                     put("role", "user")
-                    put("content", "ping")
+                    put("content", "2 + 2 = ?")
                 })
             })
         }
@@ -132,7 +140,11 @@ class CustomApiProvider(
     }
 
     private fun callCustomEndpoint(prompt: String, config: AIConfig): Result<String> {
-        val endpointUrl = config.effectiveBaseUrl.trim()
+        val endpointUrl = if (config.effectiveBaseUrl.endsWith("/v1", ignoreCase = true) || config.effectiveBaseUrl.contains("huggingface", ignoreCase = true)) {
+            com.example.ai.ChatUrlNormalizer.normalize(config.effectiveBaseUrl)
+        } else {
+            config.effectiveBaseUrl.trim()
+        }
         if (endpointUrl.isBlank()) {
             return Result.failure(IllegalStateException("Custom API endpoint URL is not configured"))
         }
@@ -141,7 +153,12 @@ class CustomApiProvider(
             put("model", config.effectiveModel)
             put("prompt", prompt)
             put("temperature", config.temperature.toDouble())
+            put("stream", false)
             put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", AIPromptBuilder.buildSystemInstruction())
+                })
                 put(JSONObject().apply {
                     put("role", "user")
                     put("content", prompt)

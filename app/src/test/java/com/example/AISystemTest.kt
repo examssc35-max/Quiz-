@@ -423,4 +423,63 @@ class AISystemTest {
         assertTrue(analysis.strengths.isNotEmpty())
         assertTrue(analysis.recommendations.isNotEmpty())
     }
+
+    // =========================================================================
+    // 6. URL NORMALIZATION & OPENAI-COMPATIBLE CONTRACT TESTS
+    // =========================================================================
+
+    @Test
+    fun testChatUrlNormalizer_huggingFaceAndOpenAiEndpoints() {
+        val expected = "https://router.huggingface.co/v1/chat/completions"
+
+        // 1. Standard base URL
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co/v1"))
+
+        // 2. Trailing slash
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co/v1/"))
+
+        // 3. Already has /chat/completions
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co/v1/chat/completions"))
+
+        // 4. Trailing slash on full endpoint
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co/v1/chat/completions/"))
+
+        // 5. Duplicated /v1/v1/chat/completions
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co/v1/v1/chat/completions"))
+
+        // 6. Duplicated /v1/chat/completions/chat/completions
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co/v1/chat/completions/chat/completions"))
+
+        // 7. Accidental /chat/completions/v1/chat/completions
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co/chat/completions/v1/chat/completions"))
+
+        // 8. Missing /v1 for Hugging Face router
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co"))
+
+        // 9. Multiple consecutive slashes
+        assertEquals(expected, com.example.ai.ChatUrlNormalizer.normalize("https://router.huggingface.co//v1//chat//completions"))
+
+        // 10. Other standard OpenAI-compatible endpoints
+        assertEquals(
+            "https://api.openai.com/v1/chat/completions",
+            com.example.ai.ChatUrlNormalizer.normalize("https://api.openai.com/v1")
+        )
+        assertEquals(
+            "https://openrouter.ai/api/v1/chat/completions",
+            com.example.ai.ChatUrlNormalizer.normalize("https://openrouter.ai/api/v1")
+        )
+    }
+
+    @Test
+    fun testOpenAICompatibleProvider_modelNamePreservedWithSuffix() {
+        val config = AIConfig(
+            providerType = AIProviderType.OPENAI_COMPATIBLE,
+            model = "openai/gpt-oss-120b:groq",
+            baseUrl = "https://router.huggingface.co/v1"
+        )
+
+        // Model must preserve "openai/" and ":groq" exactly without alteration
+        assertEquals("openai/gpt-oss-120b:groq", config.effectiveModel)
+        assertFalse("Must not strip provider suffix", config.effectiveModel == "openai/gpt-oss-120b")
+    }
 }

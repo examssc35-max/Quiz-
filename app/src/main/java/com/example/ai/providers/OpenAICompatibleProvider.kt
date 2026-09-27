@@ -8,6 +8,7 @@ import com.example.ai.AIProviderType
 import com.example.ai.AiResultAnalysis
 import com.example.ai.AnswerEvaluationRequest
 import com.example.ai.ChatMessage
+import com.example.ai.ChatUrlNormalizer
 import com.example.ai.QuestionAiContext
 import com.example.ai.QuestionAuditResult
 import com.example.data.model.AiEvaluationResult
@@ -23,6 +24,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+/**
+ * Robust OpenAI-compatible Chat Completions Provider supporting Hugging Face Inference Endpoints,
+ * Groq, Together AI, vLLM, Ollama, and arbitrary OpenAI-compatible servers.
+ */
 class OpenAICompatibleProvider(
     private val client: OkHttpClient = defaultClient
 ) : AIProvider {
@@ -36,7 +41,7 @@ class OpenAICompatibleProvider(
         val defaultClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
                 .connectTimeout(25, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(35, TimeUnit.SECONDS)
                 .writeTimeout(25, TimeUnit.SECONDS)
                 .build()
         }
@@ -84,31 +89,44 @@ class OpenAICompatibleProvider(
     }
 
     override suspend fun testConnection(config: AIConfig): Result<String> = withContext(Dispatchers.IO) {
-        val baseUrl = config.effectiveBaseUrl.trimEnd('/')
-        if (baseUrl.isBlank()) {
-            return@withContext Result.failure(IllegalStateException("Base URL is required. Please enter an API endpoint."))
+        val targetUrl = ChatUrlNormalizer.normalize(config.effectiveBaseUrl)
+        if (targetUrl.isBlank()) {
+            return@withContext Result.failure(
+                IllegalStateException("Base URL is required. Please enter an API endpoint (e.g. https://router.huggingface.co/v1).")
+            )
         }
 
-        val model = config.effectiveModel
+        val model = config.effectiveModel.trim()
+        if (model.isBlank()) {
+            return@withContext Result.failure(
+                IllegalStateException("Model name is required (e.g. openai/gpt-oss-120b:groq).")
+            )
+        }
+
+        // Standard OpenAI-compatible Chat Completions request body
         val requestJson = JSONObject().apply {
             put("model", model)
-            put("max_tokens", 5)
+            put("temperature", 0.2)
+            put("stream", false)
             val messages = JSONArray().apply {
                 put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", "You are the Quiz Explore AI Agent.")
+                })
+                put(JSONObject().apply {
                     put("role", "user")
-                    put("content", "ping")
+                    put("content", "2 + 2 = ?")
                 })
             }
             put("messages", messages)
         }
 
-        val url = if (baseUrl.endsWith("/chat/completions")) baseUrl else "$baseUrl/chat/completions"
         val builder = Request.Builder()
-            .url(url)
+            .url(targetUrl)
             .addHeader("Content-Type", "application/json")
 
         if (config.effectiveApiKey.isNotBlank()) {
-            builder.addHeader("Authorization", "Bearer ${config.effectiveApiKey}")
+            builder.addHeader("Authorization", "Bearer ${config.effectiveApiKey.trim()}")
         }
 
         config.customHeaders.forEach { (k, v) ->
@@ -118,34 +136,48 @@ class OpenAICompatibleProvider(
         }
 
         val httpRequest = builder.post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE)).build()
-
         val startTime = System.currentTimeMillis()
+
         try {
             client.newCall(httpRequest).execute().use { response ->
                 val duration = System.currentTimeMillis() - startTime
+                val code = response.code
+                val rawBody = response.body?.string().orEmpty()
+
                 if (response.isSuccessful) {
-                    Result.success("Connection successful! Endpoint responded in ${duration}ms.")
+                    val parseResult = extractChatContent(rawBody)
+                    val aiAnswer = parseResult.getOrDefault("OK").trim()
+                    Log.d(TAG, "Test connection succeeded in ${duration}ms at $targetUrl with model $model")
+                    Result.success(
+                        "✓ Connection successful (${duration}ms)\nModel: $model\nEndpoint: $targetUrl\nAI Answer: $aiAnswer"
+                    )
                 } else {
-                    val code = response.code
-                    val err = sanitizeError(response.body?.string().orEmpty())
-                    Result.failure(Exception("HTTP $code: $err"))
+                    val snippet = sanitizeErrorBody(rawBody)
+                    // NEVER LOG API KEY OR AUTH HEADER
+                    Log.e(TAG, "Test connection failed: status=$code, url=$targetUrl, model=$model, body=$snippet")
+                    val errorMsg = formatHttpErrorMessage(code, targetUrl, model, config.providerType.displayName, snippet)
+                    Result.failure(Exception(errorMsg))
                 }
             }
         } catch (e: Exception) {
-            Result.failure(Exception("Connection failed: ${e.message.orEmpty()}", e))
+            val msg = e.message.orEmpty().ifBlank { "Network connection failed" }
+            Log.e(TAG, "Test connection exception for $targetUrl: $msg")
+            Result.failure(Exception("✕ Connection failed: $msg\nTarget URL: $targetUrl\nModel: $model", e))
         }
     }
 
     private fun callEndpointChat(prompt: String, config: AIConfig): Result<String> {
-        val baseUrl = config.effectiveBaseUrl.trimEnd('/')
-        if (baseUrl.isBlank()) {
+        val targetUrl = ChatUrlNormalizer.normalize(config.effectiveBaseUrl)
+        if (targetUrl.isBlank()) {
             return Result.failure(IllegalStateException("Base URL is required for OpenAI-compatible endpoint"))
         }
 
-        val model = config.effectiveModel
+        val model = config.effectiveModel.trim()
+
         val requestJson = JSONObject().apply {
             put("model", model)
             put("temperature", config.temperature.toDouble())
+            put("stream", false)
 
             val messages = JSONArray().apply {
                 put(JSONObject().apply {
@@ -160,13 +192,12 @@ class OpenAICompatibleProvider(
             put("messages", messages)
         }
 
-        val url = if (baseUrl.endsWith("/chat/completions")) baseUrl else "$baseUrl/chat/completions"
         val builder = Request.Builder()
-            .url(url)
+            .url(targetUrl)
             .addHeader("Content-Type", "application/json")
 
         if (config.effectiveApiKey.isNotBlank()) {
-            builder.addHeader("Authorization", "Bearer ${config.effectiveApiKey}")
+            builder.addHeader("Authorization", "Bearer ${config.effectiveApiKey.trim()}")
         }
 
         config.customHeaders.forEach { (k, v) ->
@@ -179,46 +210,94 @@ class OpenAICompatibleProvider(
 
         try {
             client.newCall(httpRequest).execute().use { response ->
+                val code = response.code
+                val rawBody = response.body?.string().orEmpty()
+
                 if (!response.isSuccessful) {
-                    val code = response.code
-                    val err = sanitizeError(response.body?.string().orEmpty())
-                    Log.e(TAG, "OpenAI-compatible call failed ($code): $err")
-                    return Result.failure(Exception("API error ($code): $err"))
+                    val snippet = sanitizeErrorBody(rawBody)
+                    // NEVER LOG API KEY OR AUTH HEADER
+                    Log.e(TAG, "Chat request failed: status=$code, url=$targetUrl, model=$model, body=$snippet")
+                    val errorMsg = formatHttpErrorMessage(code, targetUrl, model, config.providerType.displayName, snippet)
+                    return Result.failure(Exception(errorMsg))
                 }
 
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isBlank()) {
-                    return Result.failure(Exception("Empty response from API endpoint"))
-                }
-
-                val rootObj = JSONObject(responseBody)
-                val choices = rootObj.optJSONArray("choices")
-                if (choices == null || choices.length() == 0) {
-                    return Result.failure(Exception("No choices returned from API"))
-                }
-
-                val message = choices.getJSONObject(0).optJSONObject("message")
-                val text = message?.optString("content").orEmpty()
-                if (text.isBlank()) {
-                    return Result.failure(Exception("Empty content from API"))
-                }
-
-                return Result.success(text)
+                return extractChatContent(rawBody)
             }
         } catch (e: Exception) {
             val msg = e.message.orEmpty().ifBlank { "Network connection error" }
-            Log.e(TAG, "Request failed: $msg")
-            return Result.failure(Exception("Endpoint error: $msg", e))
+            Log.e(TAG, "OpenAI-compatible request exception: $msg")
+            return Result.failure(Exception("Endpoint error: $msg\nTarget URL: $targetUrl\nModel: $model", e))
         }
     }
 
-    private fun sanitizeError(raw: String): String {
+    private fun extractChatContent(responseBody: String): Result<String> {
+        val trimmed = responseBody.trim()
+        if (trimmed.isEmpty()) {
+            return Result.failure(Exception("Empty response body received from AI endpoint"))
+        }
+
         return try {
-            val json = JSONObject(raw)
-            val errorObj = json.optJSONObject("error")
-            errorObj?.optString("message", raw) ?: raw
+            val rootObj = JSONObject(trimmed)
+
+            // Check for OpenAI-style error object
+            if (rootObj.has("error")) {
+                val errorObj = rootObj.optJSONObject("error")
+                val msg = errorObj?.optString("message") ?: rootObj.optString("error")
+                return Result.failure(Exception("Server returned error: $msg"))
+            }
+
+            val choices = rootObj.optJSONArray("choices")
+            if (choices == null || choices.length() == 0) {
+                return Result.failure(Exception("No choices returned from model. Response: ${trimmed.take(150)}"))
+            }
+
+            val firstChoice = choices.getJSONObject(0)
+            val message = firstChoice.optJSONObject("message")
+            if (message != null) {
+                val content = message.optString("content").trim()
+                if (content.isNotEmpty()) {
+                    return Result.success(content)
+                }
+            }
+
+            // Fallback for completion-style format
+            val textFallback = firstChoice.optString("text").trim()
+            if (textFallback.isNotEmpty()) {
+                return Result.success(textFallback)
+            }
+
+            Result.failure(Exception("Model response choices had no 'content' or 'text'"))
         } catch (e: Exception) {
-            raw.take(200)
+            Result.failure(Exception("Failed to parse OpenAI-compatible response: ${e.message}\nRaw: ${trimmed.take(200)}", e))
+        }
+    }
+
+    private fun sanitizeErrorBody(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return ""
+        return try {
+            val json = JSONObject(trimmed)
+            val errorObj = json.optJSONObject("error")
+            val msg = errorObj?.optString("message") ?: json.optString("message")
+            if (msg.isNotBlank()) msg else trimmed.take(300)
+        } catch (e: Exception) {
+            trimmed.take(300)
+        }
+    }
+
+    private fun formatHttpErrorMessage(
+        statusCode: Int,
+        url: String,
+        model: String,
+        provider: String,
+        serverMsg: String
+    ): String {
+        return when (statusCode) {
+            404 -> "✕ Connection failed\nHTTP 404 — Endpoint or model/provider configuration not found.\nTarget URL: $url\nModel: $model${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
+            401 -> "✕ Connection failed\nHTTP 401 — Unauthorized. Please check your API key for $provider.${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
+            403 -> "✕ Connection failed\nHTTP 403 — Forbidden access to model $model.${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
+            429 -> "✕ Connection failed\nHTTP 429 — Rate limit or quota exceeded for $provider.${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
+            else -> "✕ Connection failed\nHTTP $statusCode error from $provider.\nTarget URL: $url\nModel: $model${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
         }
     }
 }
