@@ -5,8 +5,14 @@ import com.example.ai.AIConfig
 import com.example.ai.AIPromptBuilder
 import com.example.ai.AIProvider
 import com.example.ai.AIProviderType
+import com.example.ai.AiResultAnalysis
 import com.example.ai.AnswerEvaluationRequest
+import com.example.ai.ChatMessage
+import com.example.ai.QuestionAiContext
+import com.example.ai.QuestionAuditResult
 import com.example.data.model.AiEvaluationResult
+import com.example.data.model.QuestionSchema
+import com.example.data.model.QuizResultSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,71 +46,40 @@ class AnthropicProvider(
         request: AnswerEvaluationRequest,
         config: AIConfig
     ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
-        val apiKey = config.effectiveApiKey
-        if (apiKey.isBlank()) {
-            return@withContext Result.failure(IllegalStateException("Anthropic API key is not configured"))
+        val prompt = AIPromptBuilder.buildEvaluationPrompt(request)
+        callAnthropicMessages(prompt, config).map { text ->
+            val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
+            AIPromptBuilder.parseEvaluationResponse(text, fallback)
         }
+    }
 
-        val baseUrl = config.effectiveBaseUrl.trimEnd('/')
-        val model = config.effectiveModel
+    override suspend fun chatFollowUp(
+        context: QuestionAiContext,
+        history: List<ChatMessage>,
+        userMessage: String,
+        config: AIConfig
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildFollowUpChatPrompt(context, history, userMessage)
+        callAnthropicMessages(prompt, config)
+    }
 
-        val requestJson = JSONObject().apply {
-            put("model", model)
-            put("max_tokens", 1024)
-            put("system", AIPromptBuilder.buildSystemInstruction())
-            put("temperature", config.temperature.toDouble())
-
-            val messages = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", AIPromptBuilder.buildEvaluationPrompt(request))
-                })
-            }
-            put("messages", messages)
+    override suspend fun analyzeQuizResult(
+        summary: QuizResultSummary,
+        config: AIConfig
+    ): Result<AiResultAnalysis> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildResultAnalysisPrompt(summary)
+        callAnthropicMessages(prompt, config).map { text ->
+            AIPromptBuilder.parseResultAnalysis(text)
         }
+    }
 
-        val url = "$baseUrl/messages"
-        val httpRequest = Request.Builder()
-            .url(url)
-            .addHeader("x-api-key", apiKey)
-            .addHeader("anthropic-version", "2023-06-01")
-            .addHeader("content-type", "application/json")
-            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-
-        try {
-            client.newCall(httpRequest).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val code = response.code
-                    val err = sanitizeError(response.body?.string().orEmpty())
-                    Log.e(TAG, "Anthropic call failed with code $code: $err")
-                    return@withContext Result.failure(Exception("Anthropic error ($code): $err"))
-                }
-
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isBlank()) {
-                    return@withContext Result.failure(Exception("Empty response from Anthropic"))
-                }
-
-                val rootObj = JSONObject(responseBody)
-                val contentArray = rootObj.optJSONArray("content")
-                if (contentArray == null || contentArray.length() == 0) {
-                    return@withContext Result.failure(Exception("No content returned from Anthropic"))
-                }
-
-                val text = contentArray.getJSONObject(0).optString("text").orEmpty()
-                if (text.isBlank()) {
-                    return@withContext Result.failure(Exception("Empty text content from Anthropic"))
-                }
-
-                val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
-                val parsed = AIPromptBuilder.parseEvaluationResponse(text, fallback)
-                Result.success(parsed)
-            }
-        } catch (e: Exception) {
-            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
-            Log.e(TAG, "Anthropic request failed: $msg")
-            Result.failure(Exception("Anthropic error: $msg", e))
+    override suspend fun auditQuestion(
+        question: QuestionSchema,
+        config: AIConfig
+    ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
+        callAnthropicMessages(prompt, config).map { text ->
+            AIPromptBuilder.parseQuestionAudit(question.id, text)
         }
     }
 
@@ -158,6 +133,73 @@ class AnthropicProvider(
             }
         } catch (e: Exception) {
             Result.failure(Exception("Network error: ${e.message.orEmpty()}", e))
+        }
+    }
+
+    private fun callAnthropicMessages(prompt: String, config: AIConfig): Result<String> {
+        val apiKey = config.effectiveApiKey
+        if (apiKey.isBlank()) {
+            return Result.failure(IllegalStateException("Anthropic API key is not configured"))
+        }
+
+        val baseUrl = config.effectiveBaseUrl.trimEnd('/')
+        val model = config.effectiveModel
+
+        val requestJson = JSONObject().apply {
+            put("model", model)
+            put("max_tokens", 1024)
+            put("system", AIPromptBuilder.buildSystemInstruction())
+            put("temperature", config.temperature.toDouble())
+
+            val messages = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            }
+            put("messages", messages)
+        }
+
+        val url = "$baseUrl/messages"
+        val httpRequest = Request.Builder()
+            .url(url)
+            .addHeader("x-api-key", apiKey)
+            .addHeader("anthropic-version", "2023-06-01")
+            .addHeader("content-type", "application/json")
+            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        try {
+            client.newCall(httpRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val err = sanitizeError(response.body?.string().orEmpty())
+                    Log.e(TAG, "Anthropic call failed ($code): $err")
+                    return Result.failure(Exception("Anthropic error ($code): $err"))
+                }
+
+                val responseBody = response.body?.string().orEmpty()
+                if (responseBody.isBlank()) {
+                    return Result.failure(Exception("Empty response from Anthropic"))
+                }
+
+                val rootObj = JSONObject(responseBody)
+                val contentArray = rootObj.optJSONArray("content")
+                if (contentArray == null || contentArray.length() == 0) {
+                    return Result.failure(Exception("No content returned from Anthropic"))
+                }
+
+                val text = contentArray.getJSONObject(0).optString("text").orEmpty()
+                if (text.isBlank()) {
+                    return Result.failure(Exception("Empty text content from Anthropic"))
+                }
+
+                return Result.success(text)
+            }
+        } catch (e: Exception) {
+            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
+            Log.e(TAG, "Anthropic request failed: $msg")
+            return Result.failure(Exception("Anthropic error: $msg", e))
         }
     }
 

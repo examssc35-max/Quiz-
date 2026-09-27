@@ -145,6 +145,29 @@ class QuizAppViewModel(
         return id
     }
 
+    fun updateQuestionAnswer(
+        quizId: String,
+        questionId: String,
+        newAnswer: String,
+        newAcceptedAnswers: List<String> = emptyList(),
+        newOptionIndex: Int = -1,
+        onSuccess: (() -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            val success = repository.updateQuestionAnswer(
+                quizId = quizId,
+                questionId = questionId,
+                newAnswer = newAnswer,
+                newAcceptedAnswers = newAcceptedAnswers,
+                newOptionIndex = newOptionIndex
+            )
+            if (success) {
+                _operationState.value = QuizOperationState(successMessage = "Question answer updated successfully")
+                onSuccess?.invoke()
+            }
+        }
+    }
+
     fun duplicateQuiz(quizId: String) {
         viewModelScope.launch {
             _operationState.value = QuizOperationState(isLoading = true)

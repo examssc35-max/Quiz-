@@ -5,8 +5,14 @@ import com.example.ai.AIConfig
 import com.example.ai.AIPromptBuilder
 import com.example.ai.AIProvider
 import com.example.ai.AIProviderType
+import com.example.ai.AiResultAnalysis
 import com.example.ai.AnswerEvaluationRequest
+import com.example.ai.ChatMessage
+import com.example.ai.QuestionAiContext
+import com.example.ai.QuestionAuditResult
 import com.example.data.model.AiEvaluationResult
+import com.example.data.model.QuestionSchema
+import com.example.data.model.QuizResultSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,66 +46,40 @@ class CustomApiProvider(
         request: AnswerEvaluationRequest,
         config: AIConfig
     ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
-        val endpointUrl = config.effectiveBaseUrl.trim()
-        if (endpointUrl.isBlank()) {
-            return@withContext Result.failure(IllegalStateException("Custom API endpoint URL is not configured"))
-        }
-
         val prompt = AIPromptBuilder.buildEvaluationPrompt(request)
-        val model = config.effectiveModel
-
-        val requestJson = JSONObject().apply {
-            put("model", model)
-            put("prompt", prompt)
-            put("temperature", config.temperature.toDouble())
-            put("messages", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", prompt)
-                })
-            })
+        callCustomEndpoint(prompt, config).map { text ->
+            val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
+            AIPromptBuilder.parseEvaluationResponse(text, fallback)
         }
+    }
 
-        val builder = Request.Builder()
-            .url(endpointUrl)
-            .addHeader("Content-Type", "application/json")
+    override suspend fun chatFollowUp(
+        context: QuestionAiContext,
+        history: List<ChatMessage>,
+        userMessage: String,
+        config: AIConfig
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildFollowUpChatPrompt(context, history, userMessage)
+        callCustomEndpoint(prompt, config)
+    }
 
-        if (config.effectiveApiKey.isNotBlank()) {
-            builder.addHeader("Authorization", "Bearer ${config.effectiveApiKey}")
+    override suspend fun analyzeQuizResult(
+        summary: QuizResultSummary,
+        config: AIConfig
+    ): Result<AiResultAnalysis> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildResultAnalysisPrompt(summary)
+        callCustomEndpoint(prompt, config).map { text ->
+            AIPromptBuilder.parseResultAnalysis(text)
         }
+    }
 
-        config.customHeaders.forEach { (k, v) ->
-            if (k.isNotBlank() && v.isNotBlank()) {
-                builder.addHeader(k, v)
-            }
-        }
-
-        val httpRequest = builder.post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE)).build()
-
-        try {
-            client.newCall(httpRequest).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val code = response.code
-                    val err = response.body?.string().orEmpty()
-                    Log.e(TAG, "Custom endpoint failed with code $code: $err")
-                    return@withContext Result.failure(Exception("Endpoint error ($code): $err"))
-                }
-
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isBlank()) {
-                    return@withContext Result.failure(Exception("Empty response from custom endpoint"))
-                }
-
-                // Try parsing standard formats: choices[0].message.content, text, response, or raw JSON
-                val extractedText = extractResponseText(responseBody)
-                val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
-                val parsed = AIPromptBuilder.parseEvaluationResponse(extractedText, fallback)
-                Result.success(parsed)
-            }
-        } catch (e: Exception) {
-            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
-            Log.e(TAG, "Custom endpoint failed: $msg")
-            Result.failure(Exception("Custom endpoint error: $msg", e))
+    override suspend fun auditQuestion(
+        question: QuestionSchema,
+        config: AIConfig
+    ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
+        callCustomEndpoint(prompt, config).map { text ->
+            AIPromptBuilder.parseQuestionAudit(question.id, text)
         }
     }
 
@@ -148,6 +128,64 @@ class CustomApiProvider(
             }
         } catch (e: Exception) {
             Result.failure(Exception("Connection failed: ${e.message.orEmpty()}", e))
+        }
+    }
+
+    private fun callCustomEndpoint(prompt: String, config: AIConfig): Result<String> {
+        val endpointUrl = config.effectiveBaseUrl.trim()
+        if (endpointUrl.isBlank()) {
+            return Result.failure(IllegalStateException("Custom API endpoint URL is not configured"))
+        }
+
+        val requestJson = JSONObject().apply {
+            put("model", config.effectiveModel)
+            put("prompt", prompt)
+            put("temperature", config.temperature.toDouble())
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+        }
+
+        val builder = Request.Builder()
+            .url(endpointUrl)
+            .addHeader("Content-Type", "application/json")
+
+        if (config.effectiveApiKey.isNotBlank()) {
+            builder.addHeader("Authorization", "Bearer ${config.effectiveApiKey}")
+        }
+
+        config.customHeaders.forEach { (k, v) ->
+            if (k.isNotBlank() && v.isNotBlank()) {
+                builder.addHeader(k, v)
+            }
+        }
+
+        val httpRequest = builder.post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE)).build()
+
+        try {
+            client.newCall(httpRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val err = response.body?.string().orEmpty()
+                    Log.e(TAG, "Custom endpoint failed ($code): $err")
+                    return Result.failure(Exception("Endpoint error ($code): $err"))
+                }
+
+                val responseBody = response.body?.string().orEmpty()
+                if (responseBody.isBlank()) {
+                    return Result.failure(Exception("Empty response from custom endpoint"))
+                }
+
+                val extractedText = extractResponseText(responseBody)
+                return Result.success(extractedText)
+            }
+        } catch (e: Exception) {
+            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
+            Log.e(TAG, "Custom endpoint failed: $msg")
+            return Result.failure(Exception("Custom endpoint error: $msg", e))
         }
     }
 

@@ -169,6 +169,42 @@ class QuizRepository(private val database: AppDatabase) {
         database.unfinishedQuizDao().deleteUnfinishedQuiz(quizId)
     }
 
+    suspend fun updateQuestionAnswer(
+        quizId: String,
+        questionId: String,
+        newAnswer: String,
+        newAcceptedAnswers: List<String> = emptyList(),
+        newOptionIndex: Int = -1
+    ): Boolean = withContext(Dispatchers.IO) {
+        val quiz = database.quizDao().getQuizById(quizId) ?: return@withContext false
+        val schema = QuizJsonParser.validateAndParse(quiz.jsonContent).getOrNull() ?: return@withContext false
+        val updatedQuestions = schema.questions.map { q ->
+            if (q.id == questionId) {
+                if (q.type == com.example.data.model.QuestionType.MCQ && newOptionIndex in q.options.indices) {
+                    q.copy(answer = newOptionIndex)
+                } else {
+                    val allAccepted = mutableListOf<String>()
+                    if (newAnswer.isNotBlank()) allAccepted.add(newAnswer)
+                    for (acc in newAcceptedAnswers) {
+                        if (acc.isNotBlank() && acc !in allAccepted) allAccepted.add(acc)
+                    }
+                    for (acc in q.acceptedAnswers) {
+                        if (acc.isNotBlank() && acc !in allAccepted) allAccepted.add(acc)
+                    }
+                    q.copy(
+                        fillBlankAnswer = newAnswer.ifBlank { q.fillBlankAnswer },
+                        acceptedAnswers = allAccepted
+                    )
+                }
+            } else {
+                q
+            }
+        }
+        val updatedSchema = schema.copy(questions = updatedQuestions)
+        insertOrUpdateQuiz(updatedSchema, quizId)
+        true
+    }
+
     suspend fun resetStatistics() = withContext(Dispatchers.IO) {
         database.quizAttemptDao().deleteAllAttempts()
     }

@@ -1,6 +1,7 @@
 package com.example.ai
 
 import com.example.BuildConfig
+import com.example.data.model.QuestionType
 
 enum class AIProviderType(
     val id: String,
@@ -111,5 +112,47 @@ data class AnswerEvaluationRequest(
     val questionText: String,
     val acceptedAnswers: List<String>,
     val userAnswer: String,
-    val languageHint: String? = null
+    val languageHint: String? = null,
+    val questionType: QuestionType = QuestionType.FILL_BLANK,
+    val options: List<String> = emptyList(),
+    val storedCorrectOptionIndex: Int = -1,
+    val storedAnswer: String = acceptedAnswers.firstOrNull().orEmpty(),
+    val explanation: String? = null
+)
+
+data class ChatMessage(
+    val role: String, // "user", "assistant", "system"
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class QuestionAiContext(
+    val questionId: String = "",
+    val questionText: String,
+    val type: QuestionType,
+    val options: List<String> = emptyList(),
+    val storedAnswer: String = "",
+    val acceptedAnswers: List<String> = emptyList(),
+    val storedCorrectOptionIndex: Int = -1,
+    val userAnswerText: String? = null,
+    val userOptionIndex: Int? = null,
+    val explanation: String? = null,
+    val quizTitle: String = ""
+)
+
+data class AiResultAnalysis(
+    val overallSummary: String,
+    val strengths: List<String>,
+    val weakAreas: List<String>,
+    val recommendations: List<String>,
+    val mistakeBreakdown: String
+)
+
+data class QuestionAuditResult(
+    val questionId: String,
+    val isSuspicious: Boolean,
+    val issueDescription: String?,
+    val suggestedCorrectAnswer: String?,
+    val suggestedCorrectIndex: Int?,
+    val confidence: Double
 )

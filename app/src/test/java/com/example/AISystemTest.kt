@@ -368,4 +368,59 @@ class AISystemTest {
         assertNotNull(fb2)
         assertTrue("Example 5: 'disposal' must be accepted", fb2!!.isCorrect)
     }
+
+    // =========================================================================
+    // 5. CHAT FOLLOW-UP & RESULT ANALYSIS TESTS
+    // =========================================================================
+
+    @Test
+    fun testAIManager_chatFollowUp_offlineFallbackProvidesPedagogicalHelp() = runBlocking {
+        val manager = AIManager(null)
+        val context = com.example.ai.QuestionAiContext(
+            questionId = "q1",
+            questionText = "Air is the most important element of human environment.",
+            type = QuestionType.FILL_BLANK,
+            storedAnswer = "element",
+            acceptedAnswers = listOf("element"),
+            userAnswerText = "elements",
+            quizTitle = "Environment Quiz"
+        )
+
+        val reply = manager.chatFollowUp(
+            context = context,
+            history = emptyList(),
+            userMessage = "সহজ ভাষায় বুঝিয়ে দাও"
+        )
+
+        assertTrue(reply.isSuccess)
+        val text = reply.getOrThrow()
+        assertTrue(text.isNotBlank())
+        assertTrue("Reply should reference the stored answer or question", text.contains("element") || text.contains("সঠিক"))
+    }
+
+    @Test
+    fun testAIManager_analyzeQuizResult_providesStructuredInsights() = runBlocking {
+        val manager = AIManager(null)
+        val summary = com.example.data.model.QuizResultSummary(
+            quizId = "test_quiz",
+            quizTitle = "General Knowledge",
+            mode = QuizMode.EXAM,
+            totalQuestions = 5,
+            correctCount = 4,
+            wrongCount = 1,
+            unansweredCount = 0,
+            score = 20,
+            maxScore = 25,
+            accuracy = 80f,
+            timeTakenSeconds = 45,
+            reviewItems = emptyList()
+        )
+
+        val result = manager.analyzeQuizResult(summary)
+        assertTrue(result.isSuccess)
+        val analysis = result.getOrThrow()
+        assertTrue(analysis.overallSummary.isNotBlank())
+        assertTrue(analysis.strengths.isNotEmpty())
+        assertTrue(analysis.recommendations.isNotEmpty())
+    }
 }

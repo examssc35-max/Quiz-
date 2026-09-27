@@ -228,6 +228,7 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                 is Screen.Result -> {
                     ResultScreen(
                         summary = screen.summary,
+                        aiManager = viewModel.aiManager,
                         onReviewClick = { viewModel.navigateTo(Screen.Review(screen.summary)) },
                         onTryAgainClick = {
                             viewModel.startQuiz(screen.summary.quizId, screen.summary.mode, resume = false)
@@ -238,6 +239,16 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                 is Screen.Review -> {
                     ReviewAnswersScreen(
                         summary = screen.summary,
+                        aiManager = viewModel.aiManager,
+                        onUpdateQuestionAnswer = { questionId, newAns, newAccepted, newOptIdx ->
+                            viewModel.updateQuestionAnswer(
+                                quizId = screen.summary.quizId,
+                                questionId = questionId,
+                                newAnswer = newAns,
+                                newAcceptedAnswers = newAccepted,
+                                newOptionIndex = newOptIdx
+                            )
+                        },
                         onBackClick = { viewModel.navigateTo(Screen.Result(screen.summary)) }
                     )
                 }

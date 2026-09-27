@@ -5,8 +5,14 @@ import com.example.ai.AIConfig
 import com.example.ai.AIPromptBuilder
 import com.example.ai.AIProvider
 import com.example.ai.AIProviderType
+import com.example.ai.AiResultAnalysis
 import com.example.ai.AnswerEvaluationRequest
+import com.example.ai.ChatMessage
+import com.example.ai.QuestionAiContext
+import com.example.ai.QuestionAuditResult
 import com.example.data.model.AiEvaluationResult
+import com.example.data.model.QuestionSchema
+import com.example.data.model.QuizResultSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,83 +46,40 @@ class GeminiProvider(
         request: AnswerEvaluationRequest,
         config: AIConfig
     ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
-        val apiKey = config.effectiveApiKey
-        if (apiKey.isBlank()) {
-            return@withContext Result.failure(IllegalStateException("Gemini API key is not configured"))
-        }
-
         val prompt = AIPromptBuilder.buildEvaluationPrompt(request)
-        val model = config.effectiveModel
-
-        val requestJson = JSONObject().apply {
-            val contents = JSONArray()
-            val contentObj = JSONObject()
-            val parts = JSONArray()
-            val partObj = JSONObject()
-            partObj.put("text", prompt)
-            parts.put(partObj)
-            contentObj.put("parts", parts)
-            contents.put(contentObj)
-            put("contents", contents)
-
-            val systemInstruction = JSONObject().apply {
-                val sysParts = JSONArray()
-                sysParts.put(JSONObject().put("text", AIPromptBuilder.buildSystemInstruction()))
-                put("parts", sysParts)
-            }
-            put("systemInstruction", systemInstruction)
-
-            val generationConfig = JSONObject().apply {
-                put("responseMimeType", "application/json")
-                put("temperature", config.temperature.toDouble())
-            }
-            put("generationConfig", generationConfig)
+        callJsonApi(prompt, config).map { raw ->
+            val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
+            AIPromptBuilder.parseEvaluationResponse(raw, fallback)
         }
+    }
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
-        val httpRequest = Request.Builder()
-            .url(url)
-            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+    override suspend fun chatFollowUp(
+        context: QuestionAiContext,
+        history: List<ChatMessage>,
+        userMessage: String,
+        config: AIConfig
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildFollowUpChatPrompt(context, history, userMessage)
+        callTextApi(prompt, config)
+    }
 
-        try {
-            client.newCall(httpRequest).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val code = response.code
-                    val errBody = response.body?.string().orEmpty()
-                    val sanitizedError = sanitizeError(errBody)
-                    Log.e(TAG, "Gemini call failed with code $code: $sanitizedError")
-                    return@withContext Result.failure(Exception("Gemini error ($code): $sanitizedError"))
-                }
+    override suspend fun analyzeQuizResult(
+        summary: QuizResultSummary,
+        config: AIConfig
+    ): Result<AiResultAnalysis> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildResultAnalysisPrompt(summary)
+        callJsonApi(prompt, config).map { raw ->
+            AIPromptBuilder.parseResultAnalysis(raw)
+        }
+    }
 
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isBlank()) {
-                    return@withContext Result.failure(Exception("Empty response from Gemini"))
-                }
-
-                val rootObj = JSONObject(responseBody)
-                val candidates = rootObj.optJSONArray("candidates")
-                if (candidates == null || candidates.length() == 0) {
-                    return@withContext Result.failure(Exception("No candidates returned from Gemini"))
-                }
-
-                val firstCandidate = candidates.getJSONObject(0)
-                val content = firstCandidate.optJSONObject("content")
-                val parts = content?.optJSONArray("parts")
-                val text = parts?.optJSONObject(0)?.optString("text").orEmpty()
-
-                if (text.isBlank()) {
-                    return@withContext Result.failure(Exception("Empty candidate text from Gemini"))
-                }
-
-                val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
-                val parsed = AIPromptBuilder.parseEvaluationResponse(text, fallback)
-                Result.success(parsed)
-            }
-        } catch (e: Exception) {
-            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
-            Log.e(TAG, "Gemini request failed: $msg")
-            Result.failure(Exception("Gemini error: $msg", e))
+    override suspend fun auditQuestion(
+        question: QuestionSchema,
+        config: AIConfig
+    ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
+        callJsonApi(prompt, config).map { raw ->
+            AIPromptBuilder.parseQuestionAudit(question.id, raw)
         }
     }
 
@@ -165,6 +128,115 @@ class GeminiProvider(
             }
         } catch (e: Exception) {
             Result.failure(Exception("Network error: ${e.message.orEmpty()}", e))
+        }
+    }
+
+    private fun callJsonApi(prompt: String, config: AIConfig): Result<String> {
+        val apiKey = config.effectiveApiKey
+        if (apiKey.isBlank()) {
+            return Result.failure(IllegalStateException("Gemini API key is not configured"))
+        }
+
+        val model = config.effectiveModel
+        val requestJson = JSONObject().apply {
+            val contents = JSONArray()
+            val contentObj = JSONObject()
+            val parts = JSONArray()
+            val partObj = JSONObject()
+            partObj.put("text", prompt)
+            parts.put(partObj)
+            contentObj.put("parts", parts)
+            contents.put(contentObj)
+            put("contents", contents)
+
+            val systemInstruction = JSONObject().apply {
+                val sysParts = JSONArray()
+                sysParts.put(JSONObject().put("text", AIPromptBuilder.buildSystemInstruction()))
+                put("parts", sysParts)
+            }
+            put("systemInstruction", systemInstruction)
+
+            val generationConfig = JSONObject().apply {
+                put("responseMimeType", "application/json")
+                put("temperature", config.temperature.toDouble())
+            }
+            put("generationConfig", generationConfig)
+        }
+
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+        return executeGeminiCall(url, requestJson)
+    }
+
+    private fun callTextApi(prompt: String, config: AIConfig): Result<String> {
+        val apiKey = config.effectiveApiKey
+        if (apiKey.isBlank()) {
+            return Result.failure(IllegalStateException("Gemini API key is not configured"))
+        }
+
+        val model = config.effectiveModel
+        val requestJson = JSONObject().apply {
+            val contents = JSONArray()
+            val contentObj = JSONObject()
+            val parts = JSONArray()
+            val partObj = JSONObject()
+            partObj.put("text", prompt)
+            parts.put(partObj)
+            contentObj.put("parts", parts)
+            contents.put(contentObj)
+            put("contents", contents)
+
+            val generationConfig = JSONObject().apply {
+                put("temperature", 0.3)
+            }
+            put("generationConfig", generationConfig)
+        }
+
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+        return executeGeminiCall(url, requestJson)
+    }
+
+    private fun executeGeminiCall(url: String, requestJson: JSONObject): Result<String> {
+        val httpRequest = Request.Builder()
+            .url(url)
+            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        try {
+            client.newCall(httpRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val errBody = response.body?.string().orEmpty()
+                    val sanitizedError = sanitizeError(errBody)
+                    Log.e(TAG, "Gemini call failed ($code): $sanitizedError")
+                    return Result.failure(Exception("Gemini error ($code): $sanitizedError"))
+                }
+
+                val responseBody = response.body?.string().orEmpty()
+                if (responseBody.isBlank()) {
+                    return Result.failure(Exception("Empty response from Gemini"))
+                }
+
+                val rootObj = JSONObject(responseBody)
+                val candidates = rootObj.optJSONArray("candidates")
+                if (candidates == null || candidates.length() == 0) {
+                    return Result.failure(Exception("No candidates returned from Gemini"))
+                }
+
+                val firstCandidate = candidates.getJSONObject(0)
+                val content = firstCandidate.optJSONObject("content")
+                val parts = content?.optJSONArray("parts")
+                val text = parts?.optJSONObject(0)?.optString("text").orEmpty()
+
+                if (text.isBlank()) {
+                    return Result.failure(Exception("Empty candidate text from Gemini"))
+                }
+
+                return Result.success(text)
+            }
+        } catch (e: Exception) {
+            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
+            Log.e(TAG, "Gemini request failed: $msg")
+            return Result.failure(Exception("Gemini error: $msg", e))
         }
     }
 

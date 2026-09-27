@@ -910,7 +910,8 @@ class QuizEngine(
                     questionType = q.type,
                     acceptedAnswers = q.acceptedAnswers,
                     isAnswerNotSet = isAnswerNotSet,
-                    banglaExplanation = questionStates[index]?.banglaExplanation
+                    banglaExplanation = questionStates[index]?.banglaExplanation,
+                    questionId = q.id
                 )
             )
         }

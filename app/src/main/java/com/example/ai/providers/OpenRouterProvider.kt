@@ -5,8 +5,14 @@ import com.example.ai.AIConfig
 import com.example.ai.AIPromptBuilder
 import com.example.ai.AIProvider
 import com.example.ai.AIProviderType
+import com.example.ai.AiResultAnalysis
 import com.example.ai.AnswerEvaluationRequest
+import com.example.ai.ChatMessage
+import com.example.ai.QuestionAiContext
+import com.example.ai.QuestionAuditResult
 import com.example.data.model.AiEvaluationResult
+import com.example.data.model.QuestionSchema
+import com.example.data.model.QuizResultSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,76 +46,40 @@ class OpenRouterProvider(
         request: AnswerEvaluationRequest,
         config: AIConfig
     ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
-        val apiKey = config.effectiveApiKey
-        if (apiKey.isBlank()) {
-            return@withContext Result.failure(IllegalStateException("OpenRouter API key is not configured"))
+        val prompt = AIPromptBuilder.buildEvaluationPrompt(request)
+        callOpenRouterChat(prompt, config, jsonMode = true).map { text ->
+            val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
+            AIPromptBuilder.parseEvaluationResponse(text, fallback)
         }
+    }
 
-        val baseUrl = config.effectiveBaseUrl.trimEnd('/')
-        val model = config.effectiveModel
+    override suspend fun chatFollowUp(
+        context: QuestionAiContext,
+        history: List<ChatMessage>,
+        userMessage: String,
+        config: AIConfig
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildFollowUpChatPrompt(context, history, userMessage)
+        callOpenRouterChat(prompt, config, jsonMode = false)
+    }
 
-        val requestJson = JSONObject().apply {
-            put("model", model)
-            put("temperature", config.temperature.toDouble())
-            put("response_format", JSONObject().put("type", "json_object"))
-
-            val messages = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "system")
-                    put("content", AIPromptBuilder.buildSystemInstruction())
-                })
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", AIPromptBuilder.buildEvaluationPrompt(request))
-                })
-            }
-            put("messages", messages)
+    override suspend fun analyzeQuizResult(
+        summary: QuizResultSummary,
+        config: AIConfig
+    ): Result<AiResultAnalysis> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildResultAnalysisPrompt(summary)
+        callOpenRouterChat(prompt, config, jsonMode = true).map { text ->
+            AIPromptBuilder.parseResultAnalysis(text)
         }
+    }
 
-        val url = "$baseUrl/chat/completions"
-        val httpRequest = Request.Builder()
-            .url(url)
-            .addHeader("Authorization", "Bearer $apiKey")
-            .addHeader("HTTP-Referer", "https://quizexplore.app")
-            .addHeader("X-Title", "Quiz Explore")
-            .addHeader("Content-Type", "application/json")
-            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-
-        try {
-            client.newCall(httpRequest).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val code = response.code
-                    val err = sanitizeError(response.body?.string().orEmpty())
-                    Log.e(TAG, "OpenRouter call failed with code $code: $err")
-                    return@withContext Result.failure(Exception("OpenRouter error ($code): $err"))
-                }
-
-                val responseBody = response.body?.string().orEmpty()
-                if (responseBody.isBlank()) {
-                    return@withContext Result.failure(Exception("Empty response from OpenRouter"))
-                }
-
-                val rootObj = JSONObject(responseBody)
-                val choices = rootObj.optJSONArray("choices")
-                if (choices == null || choices.length() == 0) {
-                    return@withContext Result.failure(Exception("No choices returned from OpenRouter"))
-                }
-
-                val message = choices.getJSONObject(0).optJSONObject("message")
-                val text = message?.optString("content").orEmpty()
-                if (text.isBlank()) {
-                    return@withContext Result.failure(Exception("Empty content from OpenRouter"))
-                }
-
-                val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
-                val parsed = AIPromptBuilder.parseEvaluationResponse(text, fallback)
-                Result.success(parsed)
-            }
-        } catch (e: Exception) {
-            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
-            Log.e(TAG, "OpenRouter request failed: $msg")
-            Result.failure(Exception("OpenRouter error: $msg", e))
+    override suspend fun auditQuestion(
+        question: QuestionSchema,
+        config: AIConfig
+    ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
+        val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
+        callOpenRouterChat(prompt, config, jsonMode = true).map { text ->
+            AIPromptBuilder.parseQuestionAudit(question.id, text)
         }
     }
 
@@ -164,6 +134,80 @@ class OpenRouterProvider(
             }
         } catch (e: Exception) {
             Result.failure(Exception("Network error: ${e.message.orEmpty()}", e))
+        }
+    }
+
+    private fun callOpenRouterChat(prompt: String, config: AIConfig, jsonMode: Boolean): Result<String> {
+        val apiKey = config.effectiveApiKey
+        if (apiKey.isBlank()) {
+            return Result.failure(IllegalStateException("OpenRouter API key is not configured"))
+        }
+
+        val baseUrl = config.effectiveBaseUrl.trimEnd('/')
+        val model = config.effectiveModel
+
+        val requestJson = JSONObject().apply {
+            put("model", model)
+            put("temperature", if (jsonMode) config.temperature.toDouble() else 0.4)
+            if (jsonMode) {
+                put("response_format", JSONObject().put("type", "json_object"))
+            }
+
+            val messages = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", AIPromptBuilder.buildSystemInstruction())
+                })
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            }
+            put("messages", messages)
+        }
+
+        val url = "$baseUrl/chat/completions"
+        val httpRequest = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("HTTP-Referer", "https://quizexplore.app")
+            .addHeader("X-Title", "Quiz Explore")
+            .addHeader("Content-Type", "application/json")
+            .post(requestJson.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        try {
+            client.newCall(httpRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val err = sanitizeError(response.body?.string().orEmpty())
+                    Log.e(TAG, "OpenRouter call failed ($code): $err")
+                    return Result.failure(Exception("OpenRouter error ($code): $err"))
+                }
+
+                val responseBody = response.body?.string().orEmpty()
+                if (responseBody.isBlank()) {
+                    return Result.failure(Exception("Empty response from OpenRouter"))
+                }
+
+                val rootObj = JSONObject(responseBody)
+                val choices = rootObj.optJSONArray("choices")
+                if (choices == null || choices.length() == 0) {
+                    return Result.failure(Exception("No choices returned from OpenRouter"))
+                }
+
+                val message = choices.getJSONObject(0).optJSONObject("message")
+                val text = message?.optString("content").orEmpty()
+                if (text.isBlank()) {
+                    return Result.failure(Exception("Empty content from OpenRouter"))
+                }
+
+                return Result.success(text)
+            }
+        } catch (e: Exception) {
+            val msg = e.message.orEmpty().ifBlank { "Network connection error" }
+            Log.e(TAG, "OpenRouter request failed: $msg")
+            return Result.failure(Exception("OpenRouter error: $msg", e))
         }
     }
 

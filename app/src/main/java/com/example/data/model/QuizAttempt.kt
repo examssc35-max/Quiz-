@@ -20,7 +20,8 @@ data class QuestionReviewItem(
     val questionType: QuestionType = QuestionType.MCQ,
     val acceptedAnswers: List<String> = emptyList(),
     val isAnswerNotSet: Boolean = false,
-    val banglaExplanation: String? = null
+    val banglaExplanation: String? = null,
+    val questionId: String = ""
 )
 
 data class QuizResultSummary(
