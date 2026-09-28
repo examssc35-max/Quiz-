@@ -277,11 +277,16 @@ class OpenAICompatibleProvider(
         if (trimmed.isBlank()) return ""
         return try {
             val json = JSONObject(trimmed)
-            val errorObj = json.optJSONObject("error")
-            val msg = errorObj?.optString("message") ?: json.optString("message")
+            val errorVal = json.opt("error")
+            val msg = when (errorVal) {
+                is JSONObject -> errorVal.optString("message").ifBlank { errorVal.optString("detail") }
+                is String -> errorVal
+                else -> json.optString("message").ifBlank { json.optString("detail") }
+            }
             if (msg.isNotBlank()) msg else trimmed.take(300)
         } catch (e: Exception) {
-            trimmed.take(300)
+            val clean = trimmed.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim()
+            clean.take(300)
         }
     }
 
@@ -292,12 +297,14 @@ class OpenAICompatibleProvider(
         provider: String,
         serverMsg: String
     ): String {
-        return when (statusCode) {
-            404 -> "✕ Connection failed\nHTTP 404 — Endpoint or model/provider configuration not found.\nTarget URL: $url\nModel: $model${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
-            401 -> "✕ Connection failed\nHTTP 401 — Unauthorized. Please check your API key for $provider.${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
-            403 -> "✕ Connection failed\nHTTP 403 — Forbidden access to model $model.${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
-            429 -> "✕ Connection failed\nHTTP 429 — Rate limit or quota exceeded for $provider.${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
-            else -> "✕ Connection failed\nHTTP $statusCode error from $provider.\nTarget URL: $url\nModel: $model${if (serverMsg.isNotBlank()) "\nServer response: $serverMsg" else ""}"
+        val serverSnippet = if (serverMsg.isNotBlank()) "\nServer message: $serverMsg" else ""
+        val statusDesc = when (statusCode) {
+            404 -> "404 — Endpoint or model/provider configuration not found."
+            401 -> "401 — Unauthorized. Invalid or missing API key for $provider."
+            403 -> "403 — Forbidden access to model $model."
+            429 -> "429 — Rate limit or quota exceeded for $provider."
+            else -> "$statusCode ($provider error)"
         }
+        return "✕ Connection failed\nHTTP status: $statusDesc\nTarget URL: $url\nModel: $model$serverSnippet"
     }
 }

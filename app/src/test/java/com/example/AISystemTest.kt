@@ -482,4 +482,22 @@ class AISystemTest {
         assertEquals("openai/gpt-oss-120b:groq", config.effectiveModel)
         assertFalse("Must not strip provider suffix", config.effectiveModel == "openai/gpt-oss-120b")
     }
+
+    @Test
+    fun testChatUrlNormalizer_arbitraryCustomEndpoints() {
+        // Local Ollama / vLLM
+        assertEquals(
+            "http://localhost:11434/v1/chat/completions",
+            com.example.ai.ChatUrlNormalizer.normalize("http://localhost:11434/v1")
+        )
+        assertEquals(
+            "http://192.168.1.50:8000/v1/chat/completions",
+            com.example.ai.ChatUrlNormalizer.normalize("http://192.168.1.50:8000/v1/chat/completions")
+        )
+        // With trailing slash and multiple v1
+        assertEquals(
+            "https://my-custom-proxy.internal/v1/chat/completions",
+            com.example.ai.ChatUrlNormalizer.normalize("https://my-custom-proxy.internal/v1/v1/")
+        )
+    }
 }

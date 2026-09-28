@@ -49,10 +49,9 @@ object ChatUrlNormalizer {
             rest = "$baseBefore/v1"
         }
 
-        // 6. Deduplicate /v1/v1 -> /v1
-        while (rest.endsWith("/v1/v1", ignoreCase = true)) {
-            rest = rest.substring(0, rest.length - 3).trimEnd('/')
-        }
+        // 6. Deduplicate repeated /v1 segments (e.g. /v1/v1 -> /v1)
+        rest = rest.replace(Regex("(/v1)+(/)?$"), "/v1")
+        rest = rest.replace(Regex("(/v1){2,}"), "/v1")
 
         // 7. For Hugging Face router, ensure /v1 is present
         if (rest.contains("router.huggingface.co", ignoreCase = true) && !rest.endsWith("/v1", ignoreCase = true)) {

@@ -129,13 +129,36 @@ class CustomApiProvider(
             client.newCall(httpRequest).execute().use { response ->
                 val duration = System.currentTimeMillis() - startTime
                 if (response.isSuccessful) {
-                    Result.success("Connection successful! Custom endpoint responded in ${duration}ms.")
+                    Result.success("✓ Connection successful (${duration}ms)\nModel: ${config.effectiveModel}\nEndpoint: $endpointUrl")
                 } else {
-                    Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
+                    val code = response.code
+                    val rawBody = response.body?.string().orEmpty().trim()
+                    val snippet = if (rawBody.isNotBlank()) {
+                        try {
+                            val json = JSONObject(rawBody)
+                            val errorVal = json.opt("error")
+                            when (errorVal) {
+                                is JSONObject -> errorVal.optString("message").ifBlank { errorVal.optString("detail") }
+                                is String -> errorVal
+                                else -> json.optString("message").ifBlank { json.optString("detail") }
+                            }.ifBlank { rawBody.take(200) }
+                        } catch (e: Exception) {
+                            rawBody.replace(Regex("<[^>]*>"), " ").trim().take(200)
+                        }
+                    } else ""
+                    val serverSnippet = if (snippet.isNotBlank()) "\nServer message: $snippet" else ""
+                    val statusDesc = when (code) {
+                        404 -> "404 — Endpoint or model/provider configuration not found."
+                        401 -> "401 — Unauthorized. Invalid or missing API key."
+                        403 -> "403 — Forbidden access to model."
+                        429 -> "429 — Rate limit or quota exceeded."
+                        else -> "$code (Custom endpoint error)"
+                    }
+                    Result.failure(Exception("✕ Connection failed\nHTTP status: $statusDesc\nTarget URL: $endpointUrl\nModel: ${config.effectiveModel}$serverSnippet"))
                 }
             }
         } catch (e: Exception) {
-            Result.failure(Exception("Connection failed: ${e.message.orEmpty()}", e))
+            Result.failure(Exception("✕ Connection failed: ${e.message.orEmpty()}\nTarget URL: $endpointUrl\nModel: ${config.effectiveModel}", e))
         }
     }
 
