@@ -79,7 +79,7 @@ class CustomApiProvider(
     ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
         val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
         callCustomEndpoint(prompt, config).map { text ->
-            AIPromptBuilder.parseQuestionAudit(question.id, text)
+            AIPromptBuilder.parseQuestionAudit(question, text)
         }
     }
 

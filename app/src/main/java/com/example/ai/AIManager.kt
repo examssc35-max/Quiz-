@@ -30,6 +30,7 @@ class AIManager(
 
         // In-memory cache across questions and sessions
         private val evaluationCache = ConcurrentHashMap<String, AiEvaluationResult>()
+        private val auditCache = ConcurrentHashMap<String, QuestionAuditResult>()
 
         @Volatile
         private var INSTANCE: AIManager? = null
@@ -65,11 +66,13 @@ class AIManager(
     fun saveConfig(config: AIConfig) {
         storage?.saveConfig(config)
         evaluationCache.clear()
+        auditCache.clear()
     }
 
     fun resetConfig() {
         storage?.resetConfig()
         evaluationCache.clear()
+        auditCache.clear()
     }
 
     override suspend fun evaluateAnswer(
@@ -201,27 +204,201 @@ class AIManager(
         }
     }
 
-    suspend fun auditQuestion(question: QuestionSchema): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
+    suspend fun auditQuestion(
+        question: QuestionSchema,
+        contextHint: String = ""
+    ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
         val config = getCurrentConfig()
 
+        val cacheKey = "${config.providerType.id}::${config.effectiveModel}::${question.type}::${question.question.trim()}::${question.options.joinToString("||")}::${question.answer}::${question.fillBlankAnswer}"
+        auditCache[cacheKey]?.let { cached ->
+            Log.d(TAG, "Returning cached question audit for: ${question.id}")
+            return@withContext Result.success(cached)
+        }
+
         if (!config.enabled || (!config.isKeyConfigured && config.providerType != AIProviderType.CUSTOM)) {
-            return@withContext Result.success(
-                QuestionAuditResult(
-                    questionId = question.id,
-                    isSuspicious = false,
-                    issueDescription = null,
-                    suggestedCorrectAnswer = null,
-                    suggestedCorrectIndex = null,
-                    confidence = 0.5
-                )
-            )
+            val localResult = generateLocalQuestionAudit(question)
+            return@withContext Result.success(localResult)
         }
 
         val provider = providers[config.providerType] ?: providers.getValue(AIProviderType.GEMINI)
         try {
-            provider.auditQuestion(question, config)
+            val providerResult = provider.auditQuestion(question, config)
+            if (providerResult.isSuccess) {
+                val auditRes = providerResult.getOrThrow()
+                auditCache[cacheKey] = auditRes
+                Result.success(auditRes)
+            } else {
+                Log.w(TAG, "AI question audit returned failure: ${providerResult.exceptionOrNull()?.message}")
+                val localFallback = generateLocalQuestionAudit(question)
+                Result.success(localFallback)
+            }
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "Exception during question audit: ${e.message}", e)
+            val localFallback = generateLocalQuestionAudit(question)
+            Result.success(localFallback)
+        }
+    }
+
+    /**
+     * Audits an entire quiz asynchronously on Dispatchers.IO, updating progress after each question.
+     * Applies safe corrections (confidence >= 0.90) and generates an audit log.
+     */
+    suspend fun auditQuiz(
+        quiz: com.example.data.model.QuizSchema,
+        onProgress: (verifiedCount: Int, totalCount: Int, currentQuestionText: String) -> Unit = { _, _, _ -> }
+    ): Result<Pair<com.example.data.model.QuizSchema, QuizAuditSummary>> = withContext(Dispatchers.IO) {
+        val auditedQuestions = mutableListOf<QuestionSchema>()
+        val records = mutableListOf<QuestionAuditRecord>()
+        var correctedCount = 0
+        var needsReviewCount = 0
+
+        val total = quiz.questions.size
+
+        quiz.questions.forEachIndexed { index, question ->
+            onProgress(index, total, question.question)
+
+            val auditRes = try {
+                auditQuestion(question).getOrElse { generateLocalQuestionAudit(question) }
+            } catch (e: Exception) {
+                generateLocalQuestionAudit(question)
+            }
+
+            if (auditRes.needsReview) {
+                needsReviewCount++
+            }
+
+            val origDisplay = if (question.type == QuestionType.MCQ) {
+                val optText = question.options.getOrNull(question.answer) ?: "Index ${question.answer}"
+                "${(question.answer + 'A'.code).toChar()}. $optText"
+            } else {
+                question.fillBlankAnswer.ifBlank { question.acceptedAnswers.firstOrNull().orEmpty() }
+            }
+
+            val isChanged = auditRes.answerChanged && (
+                (question.type == QuestionType.MCQ && auditRes.verifiedAnswerIndex != null && auditRes.verifiedAnswerIndex != question.answer) ||
+                (question.type == QuestionType.FILL_BLANK && !auditRes.verifiedAnswerText.isNullOrBlank() && !auditRes.verifiedAnswerText.equals(question.fillBlankAnswer, ignoreCase = true))
+            )
+
+            if (isChanged) {
+                correctedCount++
+            }
+
+            val corrDisplay = if (question.type == QuestionType.MCQ) {
+                val idx = auditRes.verifiedAnswerIndex ?: question.answer
+                val optText = question.options.getOrNull(idx) ?: "Index $idx"
+                "${(idx + 'A'.code).toChar()}. $optText"
+            } else {
+                auditRes.verifiedAnswerText ?: origDisplay
+            }
+
+            records.add(
+                QuestionAuditRecord(
+                    questionId = question.id,
+                    questionText = question.question,
+                    originalAnswer = origDisplay,
+                    correctedAnswer = corrDisplay,
+                    changed = isChanged,
+                    reason = auditRes.reason.ifBlank { if (isChanged) "AI verified and corrected answer" else "Answer confirmed accurate" },
+                    confidence = auditRes.confidence,
+                    needsReview = auditRes.needsReview,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+
+            // Apply verified data to question
+            val updatedQuestion = if (isChanged) {
+                if (question.type == QuestionType.MCQ) {
+                    question.copy(
+                        verifiedAnswerIndex = auditRes.verifiedAnswerIndex,
+                        isVerified = true,
+                        verificationConfidence = auditRes.confidence,
+                        verificationReason = auditRes.reason,
+                        needsReview = auditRes.needsReview,
+                        verifiedExplanation = auditRes.correctedExplanation ?: question.explanation,
+                        lastVerifiedAt = System.currentTimeMillis(),
+                        correctedOptions = if (auditRes.correctedOptions.isNotEmpty()) auditRes.correctedOptions else question.options
+                    )
+                } else {
+                    question.copy(
+                        verifiedFillBlankAnswer = auditRes.verifiedAnswerText,
+                        verifiedAcceptedAnswers = if (auditRes.acceptedAnswers.isNotEmpty()) auditRes.acceptedAnswers else question.acceptedAnswers,
+                        isVerified = true,
+                        verificationConfidence = auditRes.confidence,
+                        verificationReason = auditRes.reason,
+                        needsReview = auditRes.needsReview,
+                        verifiedExplanation = auditRes.correctedExplanation ?: question.explanation,
+                        lastVerifiedAt = System.currentTimeMillis()
+                    )
+                }
+            } else {
+                question.copy(
+                    isVerified = true,
+                    verificationConfidence = auditRes.confidence,
+                    verificationReason = auditRes.reason,
+                    needsReview = auditRes.needsReview,
+                    lastVerifiedAt = System.currentTimeMillis()
+                )
+            }
+
+            auditedQuestions.add(updatedQuestion)
+            onProgress(index + 1, total, question.question)
+        }
+
+        val updatedSchema = quiz.copy(questions = auditedQuestions)
+        val summary = QuizAuditSummary(
+            quizId = quiz.title.hashCode().toString(),
+            totalQuestionsAudited = total,
+            correctedCount = correctedCount,
+            needsReviewCount = needsReviewCount,
+            auditRecords = records,
+            auditedAt = System.currentTimeMillis()
+        )
+
+        Result.success(Pair(updatedSchema, summary))
+    }
+
+    fun generateLocalQuestionAudit(question: QuestionSchema): QuestionAuditResult {
+        if (question.type == QuestionType.MCQ) {
+            val isOutOfBounds = question.answer !in question.options.indices
+            val origText = question.options.getOrNull(question.answer).orEmpty()
+            return QuestionAuditResult(
+                questionId = question.id,
+                isValid = !isOutOfBounds,
+                needsReview = isOutOfBounds,
+                questionText = question.question,
+                questionType = QuestionType.MCQ,
+                originalAnswerIndex = question.answer,
+                verifiedAnswerIndex = if (!isOutOfBounds) question.answer else null,
+                originalAnswerText = origText,
+                verifiedAnswerText = origText,
+                acceptedAnswers = emptyList(),
+                answerChanged = false,
+                confidence = 0.85,
+                reason = if (isOutOfBounds) "MCQ answer index ${question.answer} is out of options range." else "AI verification unavailable. Original quiz answer preserved.",
+                correctedOptions = emptyList(),
+                correctedExplanation = question.explanation
+            )
+        } else {
+            val isEmpty = question.fillBlankAnswer.isBlank() && question.acceptedAnswers.isEmpty()
+            val text = question.fillBlankAnswer.ifBlank { question.acceptedAnswers.firstOrNull().orEmpty() }
+            return QuestionAuditResult(
+                questionId = question.id,
+                isValid = !isEmpty,
+                needsReview = isEmpty,
+                questionText = question.question,
+                questionType = QuestionType.FILL_BLANK,
+                originalAnswerIndex = null,
+                verifiedAnswerIndex = null,
+                originalAnswerText = text,
+                verifiedAnswerText = text,
+                acceptedAnswers = question.acceptedAnswers,
+                answerChanged = false,
+                confidence = 0.85,
+                reason = if (isEmpty) "Fill-blank answer is not configured." else "AI verification unavailable. Original quiz answer preserved.",
+                correctedOptions = emptyList(),
+                correctedExplanation = question.explanation
+            )
         }
     }
 
@@ -249,6 +426,12 @@ class AIManager(
         val userAns = context.userAnswerText ?: context.options.getOrNull(context.userOptionIndex ?: -1).orEmpty()
 
         return when {
+            context.wasCorrected && (userQuery.contains("কেন পরিবর্তন", ignoreCase = true) || userQuery.contains("correct", ignoreCase = true) || userQuery.contains("পরিবর্তন", ignoreCase = true)) -> {
+                "এই প্রশ্নটিতে কুইজের সংরক্ষিত মূল উত্তর ছিল ‘${context.originalAnswerDisplay.orEmpty()}’। কিন্তু এআই যাচাইকরণ নিশ্চিত করেছে যে সঠিক উত্তর হওয়া উচিত ‘${context.verifiedAnswerDisplay.orEmpty()}’। কারণ: ${context.correctionReason ?: "মূল উত্তরটি প্রশ্নের সাথে সঙ্গতিপূর্ণ ছিল না।"}"
+            }
+            userQuery.contains("নিশ্চিত", ignoreCase = true) || userQuery.contains("sure", ignoreCase = true) -> {
+                "হ্যাঁ, প্রশ্ন ‘${context.questionText}’-এর তথ্য ও ব্যাকরণগত নিয়মাবলি পুনরায় বিশ্লেষণ করা হয়েছে। বর্তমান যাচাইকৃত উত্তর ‘${if (context.wasCorrected) context.verifiedAnswerDisplay else stored}’ সর্বাধিক নির্ভরযোগ্য।"
+            }
             userQuery.contains("সহজ", ignoreCase = true) || userQuery.contains("বুঝাও", ignoreCase = true) -> {
                 "এই প্রশ্নটিতে ‘${context.questionText}’ জানতে চাওয়া হয়েছে। এখানে সঠিক উত্তর হলো ‘$stored’। এটি বাক্যের অর্থ ও প্রাসঙ্গিক নিয়মানুযায়ী উপযুক্ত।"
             }

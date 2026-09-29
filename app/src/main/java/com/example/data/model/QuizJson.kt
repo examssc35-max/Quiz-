@@ -53,11 +53,22 @@ data class QuestionSchema(
     val type: QuestionType = QuestionType.MCQ,
     val question: String,
     val options: List<String> = emptyList(),
-    val answer: Int = 0, // 0-based index of correct option for MCQ
-    val fillBlankAnswer: String = "", // Primary correct answer for FILL_BLANK
-    val acceptedAnswers: List<String> = emptyList(), // All accepted answers for FILL_BLANK
+    val answer: Int = 0, // 0-based index of original correct option for MCQ
+    val fillBlankAnswer: String = "", // Primary original correct answer for FILL_BLANK
+    val acceptedAnswers: List<String> = emptyList(), // All original accepted answers for FILL_BLANK
     val points: Int = 1,
-    val explanation: String? = null
+    val explanation: String? = null,
+    // AI Verification & Correction fields:
+    val verifiedAnswerIndex: Int? = null,
+    val verifiedFillBlankAnswer: String? = null,
+    val verifiedAcceptedAnswers: List<String>? = null,
+    val verifiedExplanation: String? = null,
+    val isVerified: Boolean = false,
+    val verificationConfidence: Double = 0.0,
+    val verificationReason: String? = null,
+    val needsReview: Boolean = false,
+    val lastVerifiedAt: Long? = null,
+    val correctedOptions: List<String>? = null
 ) {
     // Secondary constructor for existing code constructing MCQ questions without 'type'
     constructor(
@@ -79,11 +90,31 @@ data class QuestionSchema(
         explanation = explanation
     )
 
+    // Effective verified properties used by QuizEngine and Student Answer Evaluation (Priority: Verified AI -> Local -> Original)
+    val effectiveAnswerIndex: Int
+        get() = verifiedAnswerIndex ?: answer
+
+    val effectiveFillBlankAnswer: String
+        get() = verifiedFillBlankAnswer?.ifBlank { null } ?: fillBlankAnswer
+
+    val effectiveAcceptedAnswers: List<String>
+        get() = if (!verifiedAcceptedAnswers.isNullOrEmpty()) verifiedAcceptedAnswers else acceptedAnswers
+
+    val effectiveExplanation: String?
+        get() = verifiedExplanation?.ifBlank { null } ?: explanation
+
+    val effectiveOptions: List<String>
+        get() = if (!correctedOptions.isNullOrEmpty()) correctedOptions else options
+
+    val wasAnswerCorrected: Boolean
+        get() = isVerified && ((type == QuestionType.MCQ && verifiedAnswerIndex != null && verifiedAnswerIndex != answer) ||
+                (type == QuestionType.FILL_BLANK && verifiedFillBlankAnswer != null && !verifiedFillBlankAnswer.equals(fillBlankAnswer, ignoreCase = true)))
+
     val isAnswerConfigured: Boolean
         get() = if (type == QuestionType.FILL_BLANK) {
-            fillBlankAnswer.isNotBlank() || acceptedAnswers.any { it.isNotBlank() }
+            effectiveFillBlankAnswer.isNotBlank() || effectiveAcceptedAnswers.any { it.isNotBlank() }
         } else {
-            options.isNotEmpty() && answer in options.indices
+            effectiveOptions.isNotEmpty() && effectiveAnswerIndex in effectiveOptions.indices
         }
 }
 
@@ -175,6 +206,28 @@ object QuizJsonParser {
                         )
                     }
 
+                    // Check for AI verification fields (safe reading)
+                    val isVerified = qObj.optBoolean("is_verified", qObj.optBoolean("isVerified", false))
+                    val verifiedAnswerIndex = when {
+                        qObj.has("verified_answer_index") -> qObj.optInt("verified_answer_index")
+                        qObj.has("verifiedAnswerIndex") -> qObj.optInt("verifiedAnswerIndex")
+                        qObj.has("verified_answer") && qObj.get("verified_answer") is Number -> qObj.optInt("verified_answer")
+                        qObj.has("verifiedAnswer") && qObj.get("verifiedAnswer") is Number -> qObj.optInt("verifiedAnswer")
+                        else -> null
+                    }
+                    val confidence = qObj.optDouble("confidence", qObj.optDouble("verificationConfidence", 0.0))
+                    val reason = qObj.optString("reason", qObj.optString("verificationReason", "")).ifBlank { null }
+                    val needsReview = qObj.optBoolean("needs_review", qObj.optBoolean("needsReview", false))
+                    val verifiedExplanation = qObj.optString("corrected_explanation", qObj.optString("verifiedExplanation", "")).ifBlank { null }
+                    val lastVerifiedAt = if (qObj.has("last_verified_at")) qObj.optLong("last_verified_at") else if (qObj.has("lastVerifiedAt")) qObj.optLong("lastVerifiedAt") else null
+
+                    val correctedOptionsList = if (qObj.has("corrected_options")) {
+                        val corrArr = qObj.getJSONArray("corrected_options")
+                        val list = mutableListOf<String>()
+                        for (idx in 0 until corrArr.length()) list.add(corrArr.getString(idx).trim())
+                        list
+                    } else null
+
                     questions.add(
                         QuestionSchema(
                             id = id,
@@ -183,7 +236,15 @@ object QuizJsonParser {
                             options = optionsList,
                             answer = answerIndex,
                             points = points,
-                            explanation = explanation
+                            explanation = explanation,
+                            verifiedAnswerIndex = verifiedAnswerIndex,
+                            isVerified = isVerified,
+                            verificationConfidence = confidence,
+                            verificationReason = reason,
+                            needsReview = needsReview,
+                            verifiedExplanation = verifiedExplanation,
+                            lastVerifiedAt = lastVerifiedAt,
+                            correctedOptions = correctedOptionsList
                         )
                     )
                 } else {
@@ -228,6 +289,29 @@ object QuizJsonParser {
                     // For type = "fill_blank", allow "answer": "" (do NOT require a non-empty answer)
                     val primaryAnswer = acceptedAnswers.firstOrNull() ?: ""
 
+                    // Check for AI verification fields for fill_blank
+                    val isVerified = qObj.optBoolean("is_verified", qObj.optBoolean("isVerified", false))
+                    val verifiedFillBlankAnswer = when {
+                        qObj.has("verified_fill_blank_answer") -> qObj.optString("verified_fill_blank_answer")
+                        qObj.has("verifiedFillBlankAnswer") -> qObj.optString("verifiedFillBlankAnswer")
+                        qObj.has("verified_answer") && qObj.get("verified_answer") is String -> qObj.optString("verified_answer")
+                        qObj.has("verifiedAnswer") && qObj.get("verifiedAnswer") is String -> qObj.optString("verifiedAnswer")
+                        else -> null
+                    }?.ifBlank { null }
+
+                    val verifiedAcceptedList = if (qObj.has("verified_accepted_answers")) {
+                        val vArr = qObj.getJSONArray("verified_accepted_answers")
+                        val list = mutableListOf<String>()
+                        for (idx in 0 until vArr.length()) list.add(vArr.getString(idx).trim())
+                        list
+                    } else null
+
+                    val confidence = qObj.optDouble("confidence", qObj.optDouble("verificationConfidence", 0.0))
+                    val reason = qObj.optString("reason", qObj.optString("verificationReason", "")).ifBlank { null }
+                    val needsReview = qObj.optBoolean("needs_review", qObj.optBoolean("needsReview", false))
+                    val verifiedExplanation = qObj.optString("corrected_explanation", qObj.optString("verifiedExplanation", "")).ifBlank { null }
+                    val lastVerifiedAt = if (qObj.has("last_verified_at")) qObj.optLong("last_verified_at") else if (qObj.has("lastVerifiedAt")) qObj.optLong("lastVerifiedAt") else null
+
                     questions.add(
                         QuestionSchema(
                             id = id,
@@ -238,7 +322,15 @@ object QuizJsonParser {
                             fillBlankAnswer = primaryAnswer,
                             acceptedAnswers = acceptedAnswers,
                             points = points,
-                            explanation = explanation
+                            explanation = explanation,
+                            verifiedFillBlankAnswer = verifiedFillBlankAnswer,
+                            verifiedAcceptedAnswers = verifiedAcceptedList,
+                            isVerified = isVerified,
+                            verificationConfidence = confidence,
+                            verificationReason = reason,
+                            needsReview = needsReview,
+                            verifiedExplanation = verifiedExplanation,
+                            lastVerifiedAt = lastVerifiedAt
                         )
                     )
                 }
@@ -284,12 +376,39 @@ object QuizJsonParser {
                 } else {
                     qObj.put("answer", q.fillBlankAnswer.ifEmpty { q.acceptedAnswers.firstOrNull() ?: "" })
                 }
+                if (q.isVerified && q.verifiedFillBlankAnswer != null) {
+                    qObj.put("verified_answer", q.verifiedFillBlankAnswer)
+                    qObj.put("verified_fill_blank_answer", q.verifiedFillBlankAnswer)
+                }
+                if (q.isVerified && !q.verifiedAcceptedAnswers.isNullOrEmpty()) {
+                    val vArr = JSONArray()
+                    q.verifiedAcceptedAnswers.forEach { vArr.put(it) }
+                    qObj.put("verified_accepted_answers", vArr)
+                }
             } else {
                 qObj.put("type", "mcq")
                 val optionsArr = JSONArray()
                 q.options.forEach { opt -> optionsArr.put(opt) }
                 qObj.put("options", optionsArr)
                 qObj.put("answer", q.answer)
+                if (q.isVerified && q.verifiedAnswerIndex != null) {
+                    qObj.put("verified_answer", q.verifiedAnswerIndex)
+                    qObj.put("verified_answer_index", q.verifiedAnswerIndex)
+                }
+                if (q.isVerified && !q.correctedOptions.isNullOrEmpty()) {
+                    val corrArr = JSONArray()
+                    q.correctedOptions.forEach { corrArr.put(it) }
+                    qObj.put("corrected_options", corrArr)
+                }
+            }
+
+            if (q.isVerified) {
+                qObj.put("is_verified", true)
+                if (q.verificationConfidence > 0) qObj.put("confidence", q.verificationConfidence)
+                if (q.verificationReason != null) qObj.put("reason", q.verificationReason)
+                if (q.needsReview) qObj.put("needs_review", true)
+                if (q.verifiedExplanation != null) qObj.put("corrected_explanation", q.verifiedExplanation)
+                if (q.lastVerifiedAt != null) qObj.put("last_verified_at", q.lastVerifiedAt)
             }
 
             qObj.put("points", q.points)

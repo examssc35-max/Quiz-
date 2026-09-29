@@ -118,6 +118,7 @@ object AIPromptBuilder {
             - Stored Answer: "${context.storedAnswer}"
             ${if (context.acceptedAnswers.isNotEmpty()) "- Accepted Answers: ${context.acceptedAnswers.joinToString(", ")}" else ""}
             ${if (context.explanation != null) "- Stored Explanation: \"${context.explanation}\"" else ""}
+            ${if (context.wasCorrected) "- AI VERIFIED CORRECTION:\n  Original Answer: \"${context.originalAnswerDisplay.orEmpty()}\"\n  AI Verified Answer: \"${context.verifiedAnswerDisplay.orEmpty()}\"\n  Correction Reason: \"${context.correctionReason.orEmpty()}\"\n  Confidence: ${context.auditConfidence ?: 0.95}" else ""}
             - Student's Submitted Answer: "${context.userAnswerText ?: context.options.getOrNull(context.userOptionIndex ?: -1) ?: "None"}"
 
             CONVERSATION HISTORY:
@@ -128,10 +129,11 @@ object AIPromptBuilder {
 
             TUTOR INSTRUCTIONS:
             1. Answer directly and concisely in natural, friendly, and pedagogical Bengali (বাংলা).
-            2. Be intellectually honest: If the stored JSON answer is wrong or incomplete, acknowledge it candidly.
+            2. Be intellectually honest: If the stored JSON answer was wrong, acknowledge it candidly and explain why the verified answer is correct.
             3. Explain linguistic, grammatical, mathematical, or scientific concepts simply so the student truly understands.
-            4. If the student asks "কেন ভুল?", "কেন সঠিক?", "সহজ করে বুঝাও", or "JSON কি ভুল?", give a crystal-clear breakdown based on the question context.
-            5. Keep your response focused and conversational (2 to 5 sentences unless a deeper breakdown is requested).
+            4. If the student asks "কেন পরিবর্তন করা হয়েছে?" or "Why was this corrected?", clearly detail why the original answer was flawed, cite grammatical/factual rules, and show why the corrected answer fits.
+            5. If the student asks "Are you sure?" ("তুমি কি নিশ্চিত?"), re-evaluate the full question context objectively with rigorous logic rather than merely repeating past statements.
+            6. Keep your response focused and conversational (2 to 5 sentences unless a deeper breakdown is requested).
         """.trimIndent()
     }
 
@@ -164,32 +166,74 @@ object AIPromptBuilder {
         """.trimIndent()
     }
 
-    fun buildQuestionAuditPrompt(question: QuestionSchema): String {
-        val optionsStr = question.options.mapIndexed { idx, opt ->
-            "${('A' + idx)}: \"$opt\" (index $idx)"
-        }.joinToString(", ")
+    fun buildQuestionAuditPrompt(question: QuestionSchema, contextHint: String = ""): String {
+        val optionsFormatted = if (question.type == QuestionType.MCQ) {
+            question.options.mapIndexed { idx, opt ->
+                "  $idx (${('A' + idx)}): \"$opt\""
+            }.joinToString("\n")
+        } else {
+            "  (None - Fill in the blank)"
+        }
+
+        val storedAnswerDesc = if (question.type == QuestionType.MCQ) {
+            "Index ${question.answer} (${question.options.getOrNull(question.answer) ?: "INVALID INDEX"})"
+        } else {
+            "Primary: \"${question.fillBlankAnswer}\", Accepted: ${question.acceptedAnswers.joinToString(", ") { "\"$it\"" }}"
+        }
 
         return """
-            You are the AI Quiz Quality Auditor. Inspect this question schema for accuracy, clarity, and correctness:
+            You are the Chief AI Quiz Quality Auditor & Fact-Checking Engine.
+            Your task is to independently solve and audit this quiz question. DO NOT assume the stored answer is correct.
 
             QUESTION: "${question.question}"
             TYPE: ${question.type.name}
-            OPTIONS: [$optionsStr]
-            STORED ANSWER: ${if (question.type == QuestionType.MCQ) "Index ${question.answer} (${question.options.getOrNull(question.answer)})" else question.fillBlankAnswer}
-            ACCEPTED ANSWERS: ${question.acceptedAnswers.joinToString(", ")}
+            OPTIONS:
+            $optionsFormatted
+            STORED ANSWER IN QUIZ JSON: $storedAnswerDesc
+            EXISTING EXPLANATION: "${question.explanation ?: "None"}"
+            ${if (contextHint.isNotBlank()) "ADDITIONAL CONTEXT: $contextHint" else ""}
 
-            AUDIT INSTRUCTIONS:
-            - Check if the stored answer or option index is factually or mathematically wrong.
-            - Check if the question is ambiguous or missing critical information.
-            - For MCQ, check if multiple options are equally correct or if no option is correct.
+            CRITICAL AUDITING RULES:
+            1. INDEPENDENTLY SOLVE the question first using factual knowledge, mathematics, grammar, and context.
+            2. COMPARE your independent solution with the STORED ANSWER:
+               - For MCQ: Determine which option index (0-based) is factually and contextually correct. If the stored index is wrong, set "verified_answer" to the correct index and "answer_changed": true.
+               - For FILL_BLANK: Determine the exact correct word/phrase. Set "verified_answer" to the best answer, and list all genuinely valid alternatives in "accepted_answers".
+            3. OPTIONS CHECK: Check if any option has an obvious factual error, duplicate, or corruption. If options are okay, keep "corrected_options": [].
+            4. EXPLANATION ALIGNMENT: If the answer is changed or the existing explanation conflicts with the correct answer, provide a corrected, coherent explanation in "corrected_explanation".
+            5. AMBIGUITY & CONFIDENCE:
+               - If the question is ambiguous or lacks necessary info, set "needs_review": true and confidence < 0.75.
+               - If highly certain (>= 0.90), set "confidence": 0.90 to 1.0.
+               - If moderately certain (0.75 - 0.89), set "needs_review": true.
 
-            RESPOND WITH JSON:
+            OUTPUT FORMAT:
+            Respond STRICTLY with a single JSON object. No markdown code blocks, no explanations outside JSON.
+            For MCQ:
             {
-              "isSuspicious": boolean,
-              "issueDescription": "বাংলায় বা ইংরেজিতে সমস্যার বিবরণ যদি থাকে, অন্যথায় খালি",
-              "suggestedCorrectAnswer": "সঠিক প্রস্তাবিত উত্তর",
-              "suggestedCorrectIndex": number or null,
-              "confidence": number between 0.0 and 1.0
+              "is_valid": true,
+              "needs_review": false,
+              "question": "${question.question.replace("\"", "\\\"")}",
+              "question_type": "mcq",
+              "original_answer": ${question.answer},
+              "verified_answer": 0,
+              "answer_changed": false,
+              "confidence": 0.98,
+              "reason": "<clear explanation of why this answer is correct and why stored answer was right/wrong>",
+              "corrected_options": [],
+              "corrected_explanation": "<concise explanation consistent with the verified answer>"
+            }
+
+            For FILL_BLANK:
+            {
+              "is_valid": true,
+              "needs_review": false,
+              "question_type": "fill_blank",
+              "original_answer": "${question.fillBlankAnswer.replace("\"", "\\\"")}",
+              "verified_answer": "<exact correct word or phrase>",
+              "accepted_answers": ["<primary correct>", "<valid alternative>"],
+              "answer_changed": false,
+              "confidence": 0.98,
+              "reason": "<clear explanation of grammar/context/fact>",
+              "corrected_explanation": "<concise explanation consistent with the verified answer>"
             }
         """.trimIndent()
     }
@@ -229,26 +273,181 @@ object AIPromptBuilder {
         }
     }
 
+    fun parseQuestionAudit(
+        question: QuestionSchema,
+        rawResponse: String
+    ): QuestionAuditResult {
+        val clean = extractJsonObject(rawResponse)
+        return try {
+            val obj = JSONObject(clean)
+            val isValid = obj.optBoolean("is_valid", true)
+            var needsReview = obj.optBoolean("needs_review", false)
+            val confidence = obj.optDouble("confidence", 0.95).coerceIn(0.0, 1.0)
+            val reason = obj.optString("reason", "").ifBlank {
+                obj.optString("issueDescription", "")
+            }
+            val correctedExplanation = obj.optString("corrected_explanation", "").ifBlank {
+                obj.optString("explanation", "").ifBlank { null }
+            }
+
+            if (question.type == QuestionType.MCQ) {
+                val verifiedIdx = when {
+                    obj.has("verified_answer") && obj.get("verified_answer") is Number -> obj.optInt("verified_answer")
+                    obj.has("verified_answer_index") -> obj.optInt("verified_answer_index")
+                    obj.has("suggestedCorrectIndex") && !obj.isNull("suggestedCorrectIndex") -> obj.optInt("suggestedCorrectIndex")
+                    else -> question.answer
+                }
+
+                // VALIDATION (Requirement 13):
+                // Answer index must exist within option bounds
+                val finalVerifiedIdx: Int?
+                val answerChanged: Boolean
+
+                if (verifiedIdx in question.options.indices) {
+                    finalVerifiedIdx = verifiedIdx
+                    answerChanged = verifiedIdx != question.answer
+                } else {
+                    // Invalid index returned by AI! Do NOT modify question (Requirement 13)
+                    finalVerifiedIdx = null
+                    answerChanged = false
+                    needsReview = true
+                }
+
+                // Confidence threshold enforcement (Requirement 8):
+                val safeCorrection = confidence >= 0.90 && !needsReview
+                val finalNeedsReview = if (confidence < 0.90) true else needsReview
+
+                // Corrected options validation
+                val corrOptionsList = mutableListOf<String>()
+                if (obj.has("corrected_options")) {
+                    val arr = obj.optJSONArray("corrected_options")
+                    if (arr != null && arr.length() >= 2) {
+                        for (i in 0 until arr.length()) corrOptionsList.add(arr.getString(i).trim())
+                    }
+                }
+
+                val origText = question.options.getOrNull(question.answer).orEmpty()
+                val verText = question.options.getOrNull(finalVerifiedIdx ?: question.answer).orEmpty()
+
+                QuestionAuditResult(
+                    questionId = question.id,
+                    isValid = isValid,
+                    needsReview = finalNeedsReview,
+                    questionText = question.question,
+                    questionType = QuestionType.MCQ,
+                    originalAnswerIndex = question.answer,
+                    verifiedAnswerIndex = if (safeCorrection) finalVerifiedIdx else null,
+                    originalAnswerText = origText,
+                    verifiedAnswerText = verText,
+                    acceptedAnswers = emptyList(),
+                    answerChanged = answerChanged && safeCorrection,
+                    confidence = confidence,
+                    reason = reason,
+                    correctedOptions = corrOptionsList,
+                    correctedExplanation = correctedExplanation
+                )
+            } else {
+                // FILL_BLANK
+                val origAnswer = question.fillBlankAnswer
+                val rawVerified = when {
+                    obj.has("verified_answer") -> obj.optString("verified_answer")
+                    obj.has("suggestedCorrectAnswer") -> obj.optString("suggestedCorrectAnswer")
+                    else -> origAnswer
+                }.trim()
+
+                val acceptedList = mutableListOf<String>()
+                if (obj.has("accepted_answers")) {
+                    val arr = obj.optJSONArray("accepted_answers")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val itm = arr.optString(i, "").trim()
+                            if (itm.isNotBlank() && itm !in acceptedList) acceptedList.add(itm)
+                        }
+                    }
+                }
+                if (rawVerified.isNotBlank() && rawVerified !in acceptedList) {
+                    acceptedList.add(0, rawVerified)
+                }
+
+                val answerChanged = rawVerified.isNotBlank() && !rawVerified.equals(origAnswer, ignoreCase = true)
+                val safeCorrection = confidence >= 0.90 && !needsReview && rawVerified.isNotBlank()
+                val finalNeedsReview = if (confidence < 0.90) true else needsReview
+
+                QuestionAuditResult(
+                    questionId = question.id,
+                    isValid = isValid,
+                    needsReview = finalNeedsReview,
+                    questionText = question.question,
+                    questionType = QuestionType.FILL_BLANK,
+                    originalAnswerIndex = null,
+                    verifiedAnswerIndex = null,
+                    originalAnswerText = origAnswer,
+                    verifiedAnswerText = if (safeCorrection) rawVerified else origAnswer,
+                    acceptedAnswers = if (safeCorrection && acceptedList.isNotEmpty()) acceptedList else question.acceptedAnswers,
+                    answerChanged = answerChanged && safeCorrection,
+                    confidence = confidence,
+                    reason = reason,
+                    correctedOptions = emptyList(),
+                    correctedExplanation = correctedExplanation
+                )
+            }
+        } catch (e: Exception) {
+            QuestionAuditResult(
+                questionId = question.id,
+                isValid = true,
+                needsReview = true,
+                questionText = question.question,
+                questionType = question.type,
+                originalAnswerIndex = if (question.type == QuestionType.MCQ) question.answer else null,
+                verifiedAnswerIndex = null,
+                originalAnswerText = if (question.type == QuestionType.MCQ) question.options.getOrNull(question.answer) else question.fillBlankAnswer,
+                verifiedAnswerText = null,
+                acceptedAnswers = question.acceptedAnswers,
+                answerChanged = false,
+                confidence = 0.5,
+                reason = "AI verification output could not be parsed. Original quiz answer preserved.",
+                correctedExplanation = null
+            )
+        }
+    }
+
     fun parseQuestionAudit(questionId: String, rawResponse: String): QuestionAuditResult {
         val clean = extractJsonObject(rawResponse)
         return try {
             val obj = JSONObject(clean)
+            val suggestedIdx = if (obj.has("suggestedCorrectIndex") && !obj.isNull("suggestedCorrectIndex")) {
+                obj.optInt("suggestedCorrectIndex")
+            } else if (obj.has("verified_answer") && obj.get("verified_answer") is Number) {
+                obj.optInt("verified_answer")
+            } else null
+            val suggestedAns = obj.optString("suggestedCorrectAnswer", "").ifBlank {
+                obj.optString("verified_answer", "").ifBlank { null }
+            }
+            val reason = obj.optString("reason", "").ifBlank {
+                obj.optString("issueDescription", "").ifBlank { null }
+            }
+            val answerChanged = obj.optBoolean("answer_changed", suggestedIdx != null || suggestedAns != null)
+            val needsReview = obj.optBoolean("needs_review", false)
+
             QuestionAuditResult(
                 questionId = questionId,
-                isSuspicious = obj.optBoolean("isSuspicious", false),
-                issueDescription = obj.optString("issueDescription", "").ifBlank { null },
-                suggestedCorrectAnswer = obj.optString("suggestedCorrectAnswer", "").ifBlank { null },
-                suggestedCorrectIndex = if (obj.has("suggestedCorrectIndex") && !obj.isNull("suggestedCorrectIndex")) obj.optInt("suggestedCorrectIndex") else null,
-                confidence = obj.optDouble("confidence", 0.9)
+                isValid = obj.optBoolean("is_valid", true),
+                needsReview = needsReview,
+                verifiedAnswerIndex = suggestedIdx,
+                verifiedAnswerText = suggestedAns,
+                answerChanged = answerChanged,
+                confidence = obj.optDouble("confidence", 0.9),
+                reason = reason.orEmpty(),
+                correctedExplanation = obj.optString("corrected_explanation", "").ifBlank { null }
             )
         } catch (e: Exception) {
             QuestionAuditResult(
                 questionId = questionId,
-                isSuspicious = false,
-                issueDescription = null,
-                suggestedCorrectAnswer = null,
-                suggestedCorrectIndex = null,
-                confidence = 0.5
+                isValid = true,
+                needsReview = true,
+                answerChanged = false,
+                confidence = 0.5,
+                reason = "Parsing failed"
             )
         }
     }

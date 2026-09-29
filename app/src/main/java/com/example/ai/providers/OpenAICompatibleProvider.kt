@@ -84,7 +84,7 @@ class OpenAICompatibleProvider(
     ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
         val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
         callEndpointChat(prompt, config).map { text ->
-            AIPromptBuilder.parseQuestionAudit(question.id, text)
+            AIPromptBuilder.parseQuestionAudit(question, text)
         }
     }
 

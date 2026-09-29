@@ -159,7 +159,12 @@ data class QuestionAiContext(
     val userAnswerText: String? = null,
     val userOptionIndex: Int? = null,
     val explanation: String? = null,
-    val quizTitle: String = ""
+    val quizTitle: String = "",
+    val wasCorrected: Boolean = false,
+    val originalAnswerDisplay: String? = null,
+    val verifiedAnswerDisplay: String? = null,
+    val correctionReason: String? = null,
+    val auditConfidence: Double? = null
 )
 
 data class AiResultAnalysis(
@@ -172,9 +177,43 @@ data class AiResultAnalysis(
 
 data class QuestionAuditResult(
     val questionId: String,
-    val isSuspicious: Boolean,
-    val issueDescription: String?,
-    val suggestedCorrectAnswer: String?,
-    val suggestedCorrectIndex: Int?,
-    val confidence: Double
+    val isValid: Boolean = true,
+    val needsReview: Boolean = false,
+    val questionText: String = "",
+    val questionType: QuestionType = QuestionType.MCQ,
+    val originalAnswerIndex: Int? = null,
+    val verifiedAnswerIndex: Int? = null,
+    val originalAnswerText: String? = null,
+    val verifiedAnswerText: String? = null,
+    val acceptedAnswers: List<String> = emptyList(),
+    val answerChanged: Boolean = false,
+    val confidence: Double = 0.95,
+    val reason: String = "",
+    val correctedOptions: List<String> = emptyList(),
+    val correctedExplanation: String? = null,
+    val isSuspicious: Boolean = answerChanged || needsReview || !isValid,
+    val issueDescription: String? = if (answerChanged || needsReview) reason else null,
+    val suggestedCorrectAnswer: String? = verifiedAnswerText,
+    val suggestedCorrectIndex: Int? = verifiedAnswerIndex
+)
+
+data class QuestionAuditRecord(
+    val questionId: String,
+    val questionText: String = "",
+    val originalAnswer: String,
+    val correctedAnswer: String,
+    val changed: Boolean,
+    val reason: String,
+    val confidence: Double,
+    val needsReview: Boolean = false,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class QuizAuditSummary(
+    val quizId: String,
+    val totalQuestionsAudited: Int,
+    val correctedCount: Int,
+    val needsReviewCount: Int,
+    val auditRecords: List<QuestionAuditRecord> = emptyList(),
+    val auditedAt: Long = System.currentTimeMillis()
 )

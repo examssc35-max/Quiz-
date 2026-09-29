@@ -39,6 +39,9 @@ class QuizRepository(private val database: AppDatabase) {
         val jsonString = QuizJsonParser.toJsonString(quizSchema)
         
         val existing = existingId?.let { database.quizDao().getQuizById(it) }
+        val verifiedCount = quizSchema.questions.count { it.isVerified }
+        val correctedCount = quizSchema.questions.count { it.wasAnswerCorrected }
+
         val entity = QuizEntity(
             id = id,
             title = quizSchema.title,
@@ -55,10 +58,104 @@ class QuizRepository(private val database: AppDatabase) {
             lastPlayedAt = existing?.lastPlayedAt,
             totalAttempts = existing?.totalAttempts ?: 0,
             bestScore = existing?.bestScore,
-            maxPossibleScore = totalPoints
+            maxPossibleScore = totalPoints,
+            isAiVerified = (verifiedCount > 0 && verifiedCount == quizSchema.questions.size) || (existing?.isAiVerified == true),
+            lastVerifiedAt = if (verifiedCount > 0) (existing?.lastVerifiedAt ?: System.currentTimeMillis()) else existing?.lastVerifiedAt,
+            verifiedQuestionCount = if (verifiedCount > 0) verifiedCount else existing?.verifiedQuestionCount ?: 0,
+            correctedQuestionCount = if (correctedCount > 0) correctedCount else existing?.correctedQuestionCount ?: 0,
+            verificationSummary = existing?.verificationSummary,
+            auditLogJson = existing?.auditLogJson
         )
         database.quizDao().insertQuiz(entity)
         id
+    }
+
+    suspend fun saveAuditedQuiz(quizId: String, updatedSchema: QuizSchema, summary: com.example.ai.QuizAuditSummary) = withContext(Dispatchers.IO) {
+        val existing = database.quizDao().getQuizById(quizId)
+        val jsonString = QuizJsonParser.toJsonString(updatedSchema)
+        val totalPoints = updatedSchema.questions.sumOf { it.points }
+
+        val summaryJson = JSONObject().apply {
+            put("quizId", summary.quizId)
+            put("totalAudited", summary.totalQuestionsAudited)
+            put("correctedCount", summary.correctedCount)
+            put("needsReviewCount", summary.needsReviewCount)
+            put("auditedAt", summary.auditedAt)
+            val recordsArr = JSONArray()
+            summary.auditRecords.forEach { r ->
+                val rObj = JSONObject().apply {
+                    put("questionId", r.questionId)
+                    put("questionText", r.questionText)
+                    put("originalAnswer", r.originalAnswer)
+                    put("correctedAnswer", r.correctedAnswer)
+                    put("changed", r.changed)
+                    put("reason", r.reason)
+                    put("confidence", r.confidence)
+                    put("needsReview", r.needsReview)
+                    put("timestamp", r.timestamp)
+                }
+                recordsArr.put(rObj)
+            }
+            put("records", recordsArr)
+        }.toString()
+
+        val entity = QuizEntity(
+            id = quizId,
+            title = updatedSchema.title,
+            description = updatedSchema.description,
+            category = updatedSchema.category,
+            difficulty = updatedSchema.difficulty,
+            questionCount = updatedSchema.questions.size,
+            timeLimit = updatedSchema.timeLimit,
+            shuffleQuestions = updatedSchema.shuffleQuestions,
+            shuffleOptions = updatedSchema.shuffleOptions,
+            jsonContent = jsonString,
+            isFavorite = existing?.isFavorite ?: false,
+            createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+            lastPlayedAt = existing?.lastPlayedAt,
+            totalAttempts = existing?.totalAttempts ?: 0,
+            bestScore = existing?.bestScore,
+            maxPossibleScore = totalPoints,
+            isAiVerified = true,
+            lastVerifiedAt = summary.auditedAt,
+            verifiedQuestionCount = summary.totalQuestionsAudited,
+            correctedQuestionCount = summary.correctedCount,
+            verificationSummary = "AI verified ${summary.totalQuestionsAudited} questions. ${summary.correctedCount} answers corrected.",
+            auditLogJson = summaryJson
+        )
+        database.quizDao().insertQuiz(entity)
+    }
+
+    suspend fun revertQuizVerification(quizId: String): Boolean = withContext(Dispatchers.IO) {
+        val quiz = database.quizDao().getQuizById(quizId) ?: return@withContext false
+        val schema = QuizJsonParser.validateAndParse(quiz.jsonContent).getOrNull() ?: return@withContext false
+        val restoredQuestions = schema.questions.map { q ->
+            q.copy(
+                verifiedAnswerIndex = null,
+                verifiedFillBlankAnswer = null,
+                verifiedAcceptedAnswers = null,
+                verifiedExplanation = null,
+                isVerified = false,
+                verificationConfidence = 0.0,
+                verificationReason = null,
+                needsReview = false,
+                lastVerifiedAt = null,
+                correctedOptions = null
+            )
+        }
+        val restoredSchema = schema.copy(questions = restoredQuestions)
+        val jsonString = QuizJsonParser.toJsonString(restoredSchema)
+        val entity = quiz.copy(
+            jsonContent = jsonString,
+            isAiVerified = false,
+            lastVerifiedAt = null,
+            verifiedQuestionCount = 0,
+            correctedQuestionCount = 0,
+            verificationSummary = null,
+            auditLogJson = null
+        )
+        database.quizDao().insertQuiz(entity)
+        true
     }
 
     suspend fun duplicateQuiz(quizId: String): String = withContext(Dispatchers.IO) {

@@ -62,8 +62,77 @@ class QuizAppViewModel(
     private val _operationState = MutableStateFlow(QuizOperationState())
     val operationState: StateFlow<QuizOperationState> = _operationState.asStateFlow()
 
+    private val _auditProgressState = MutableStateFlow(AuditProgressState())
+    val auditProgressState: StateFlow<AuditProgressState> = _auditProgressState.asStateFlow()
+
+    private var auditJob: kotlinx.coroutines.Job? = null
+
     fun clearOperationState() {
         _operationState.value = QuizOperationState()
+    }
+
+    fun cancelAudit() {
+        auditJob?.cancel()
+        auditJob = null
+        _auditProgressState.value = AuditProgressState()
+    }
+
+    fun auditQuiz(quizId: String) {
+        if (_auditProgressState.value.isAuditing) return
+        auditJob = viewModelScope.launch {
+            try {
+                val quiz = repository.getQuizById(quizId) ?: return@launch
+                val schema = QuizJsonParser.validateAndParse(quiz.jsonContent).getOrNull() ?: return@launch
+
+                _auditProgressState.value = AuditProgressState(
+                    isAuditing = true,
+                    quizId = quizId,
+                    current = 0,
+                    total = schema.questions.size,
+                    statusMessage = "AI is verifying your quiz..."
+                )
+
+                val result = aiManager.auditQuiz(schema) { verifiedCount, totalCount, currentQuestion ->
+                    _auditProgressState.value = _auditProgressState.value.copy(
+                        current = verifiedCount,
+                        total = totalCount,
+                        currentQuestionText = currentQuestion
+                    )
+                }
+
+                if (result.isSuccess) {
+                    val (updatedSchema, summary) = result.getOrThrow()
+                    repository.saveAuditedQuiz(quizId, updatedSchema, summary)
+                    val msg = if (summary.correctedCount > 0) {
+                        "AI verified quiz: ${summary.correctedCount} question(s) corrected"
+                    } else {
+                        "AI verified quiz: All answers confirmed accurate"
+                    }
+                    _operationState.value = QuizOperationState(successMessage = msg)
+                } else {
+                    _operationState.value = QuizOperationState(errorMessage = "AI verification failed: ${result.exceptionOrNull()?.message}")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancelled by user
+            } catch (e: Exception) {
+                _operationState.value = QuizOperationState(errorMessage = "Error during AI audit: ${e.message}")
+            } finally {
+                _auditProgressState.value = AuditProgressState()
+                auditJob = null
+            }
+        }
+    }
+
+    fun revertQuizVerification(quizId: String) {
+        viewModelScope.launch {
+            _operationState.value = QuizOperationState(isLoading = true)
+            val success = repository.revertQuizVerification(quizId)
+            if (success) {
+                _operationState.value = QuizOperationState(successMessage = "Restored original quiz answers")
+            } else {
+                _operationState.value = QuizOperationState(errorMessage = "Failed to restore original answers")
+            }
+        }
     }
 
     init {
@@ -270,3 +339,13 @@ data class QuizOperationState(
     val successMessage: String? = null,
     val errorMessage: String? = null
 )
+
+data class AuditProgressState(
+    val isAuditing: Boolean = false,
+    val quizId: String = "",
+    val current: Int = 0,
+    val total: Int = 0,
+    val currentQuestionText: String = "",
+    val statusMessage: String = ""
+)
+

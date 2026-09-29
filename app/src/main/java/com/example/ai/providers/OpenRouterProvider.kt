@@ -79,7 +79,7 @@ class OpenRouterProvider(
     ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
         val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
         callOpenRouterChat(prompt, config, jsonMode = true).map { text ->
-            AIPromptBuilder.parseQuestionAudit(question.id, text)
+            AIPromptBuilder.parseQuestionAudit(question, text)
         }
     }
 

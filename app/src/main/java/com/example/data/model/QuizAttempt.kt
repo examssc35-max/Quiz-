@@ -21,7 +21,14 @@ data class QuestionReviewItem(
     val acceptedAnswers: List<String> = emptyList(),
     val isAnswerNotSet: Boolean = false,
     val banglaExplanation: String? = null,
-    val questionId: String = ""
+    val questionId: String = "",
+    val isAiVerified: Boolean = false,
+    val wasAnswerCorrected: Boolean = false,
+    val originalAnswerDisplay: String? = null,
+    val verifiedAnswerDisplay: String? = null,
+    val correctionReason: String? = null,
+    val verificationConfidence: Double = 0.0,
+    val needsReview: Boolean = false
 )
 
 data class QuizResultSummary(

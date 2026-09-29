@@ -20,9 +20,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -78,6 +81,7 @@ fun QuizEditorScreen(
     existingQuiz: QuizEntity?,
     onBackClick: () -> Unit,
     onSaveQuiz: suspend (schema: QuizSchema) -> Unit,
+    aiManager: com.example.ai.AIManager = com.example.ai.AIManager.defaultManager,
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
@@ -437,6 +441,7 @@ fun QuizEditorScreen(
                     QuestionEditorCard(
                         index = qIndex,
                         question = question,
+                        aiManager = aiManager,
                         onUpdate = { updated -> questions[qIndex] = updated },
                         onDelete = { questions.removeAt(qIndex) }
                     )
@@ -492,9 +497,14 @@ fun QuizEditorScreen(
 fun QuestionEditorCard(
     index: Int,
     question: QuestionSchema,
+    aiManager: com.example.ai.AIManager = com.example.ai.AIManager.defaultManager,
     onUpdate: (QuestionSchema) -> Unit,
     onDelete: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    var isVerifying by remember { mutableStateOf(false) }
+    var auditResult by remember { mutableStateOf<com.example.ai.QuestionAuditResult?>(null) }
+
     GlassCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -518,17 +528,157 @@ fun QuestionEditorCard(
                     fontWeight = FontWeight.Bold
                 )
 
-                IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete Question",
-                        tint = WrongRed,
-                        modifier = Modifier.size(18.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isVerifying) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = AccentCyan,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Verifying...", color = AccentCyan, fontSize = 12.sp)
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0x2538BDF8))
+                                .clickable {
+                                    scope.launch {
+                                        isVerifying = true
+                                        try {
+                                            val res = aiManager.auditQuestion(question)
+                                            if (res.isSuccess) {
+                                                val audit = res.getOrThrow()
+                                                auditResult = audit
+                                                if (audit.answerChanged && audit.confidence >= 0.90) {
+                                                    if (question.type == QuestionType.MCQ && audit.verifiedAnswerIndex != null) {
+                                                        onUpdate(
+                                                            question.copy(
+                                                                verifiedAnswerIndex = audit.verifiedAnswerIndex,
+                                                                isVerified = true,
+                                                                verificationConfidence = audit.confidence,
+                                                                verificationReason = audit.reason,
+                                                                needsReview = audit.needsReview,
+                                                                verifiedExplanation = audit.correctedExplanation ?: question.explanation
+                                                            )
+                                                        )
+                                                    } else if (question.type == QuestionType.FILL_BLANK && !audit.verifiedAnswerText.isNullOrBlank()) {
+                                                        onUpdate(
+                                                            question.copy(
+                                                                verifiedFillBlankAnswer = audit.verifiedAnswerText,
+                                                                verifiedAcceptedAnswers = if (audit.acceptedAnswers.isNotEmpty()) audit.acceptedAnswers else question.acceptedAnswers,
+                                                                isVerified = true,
+                                                                verificationConfidence = audit.confidence,
+                                                                verificationReason = audit.reason,
+                                                                needsReview = audit.needsReview,
+                                                                verifiedExplanation = audit.correctedExplanation ?: question.explanation
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            // Handled safely
+                                        } finally {
+                                            isVerifying = false
+                                        }
+                                    }
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "AI Verify",
+                                tint = AccentCyan,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (question.isVerified) "Re-verify" else "AI Verify",
+                                color = AccentCyan,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete Question",
+                            tint = WrongRed,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
+
+            // AI verification feedback banner
+            val curAudit = auditResult
+            if (question.wasAnswerCorrected || (curAudit != null && curAudit.answerChanged)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x280D9488))
+                        .border(1.dp, AccentCyan, RoundedCornerShape(12.dp))
+                        .padding(10.dp)
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            val conf = (((curAudit?.confidence ?: question.verificationConfidence)) * 100).toInt()
+                            Text(
+                                text = "AI Auto-Corrected ($conf% confidence)",
+                                color = AccentCyan,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        val r = curAudit?.reason ?: question.verificationReason
+                        if (!r.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(text = r, color = Color(0xFFCCFBF1), fontSize = 11.sp, lineHeight = 15.sp)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            } else if (question.isVerified || curAudit != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x2010B981))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = CorrectGreen,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    val conf = (((curAudit?.confidence ?: question.verificationConfidence)) * 100).toInt()
+                    Text(
+                        text = "Answer confirmed accurate by AI ($conf%)",
+                        color = Color(0xFF6EE7B7),
+                        fontSize = 11.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             // Question Type Toggle: MCQ vs Fill in Blank
             Row(

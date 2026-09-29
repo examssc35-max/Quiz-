@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
@@ -35,13 +36,16 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -109,6 +113,7 @@ fun ImportQuizScreen(
     onBackClick: () -> Unit,
     onImportSuccess: (quizId: String) -> Unit,
     onSaveQuiz: suspend (schema: QuizSchema) -> String,
+    aiManager: com.example.ai.AIManager = com.example.ai.AIManager.defaultManager,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -119,6 +124,13 @@ fun ImportQuizScreen(
     var validatedSchema by remember { mutableStateOf<QuizSchema?>(null) }
     var importedFileName by remember { mutableStateOf<String?>(null) }
     var showHelpDialog by remember { mutableStateOf(false) }
+
+    var isAuditing by remember { mutableStateOf(false) }
+    var auditCurrent by remember { mutableIntStateOf(0) }
+    var auditTotal by remember { mutableIntStateOf(0) }
+    var auditCurrentQuestion by remember { mutableStateOf("") }
+    var auditSummary by remember { mutableStateOf<com.example.ai.QuizAuditSummary?>(null) }
+    var auditJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     // Native ACTION_OPEN_DOCUMENT file picker launcher with broad MIME support
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -454,7 +466,142 @@ fun ImportQuizScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(18.dp))
+
+            if (validatedSchema != null) {
+                if (isAuditing) {
+                    GlassCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        backgroundColor = Color(0x351E3A8A),
+                        borderBrush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF60A5FA), com.example.ui.theme.AccentBluePrimary))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = AccentCyan,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "AI is verifying your quiz...",
+                                        color = TextPrimary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "Verified $auditCurrent / $auditTotal",
+                                        color = AccentCyan,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                Text(
+                                    text = "Cancel",
+                                    color = WrongRed,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier
+                                        .clickable {
+                                            auditJob?.cancel()
+                                            isAuditing = false
+                                        }
+                                        .padding(4.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            val progressFraction = if (auditTotal > 0) (auditCurrent.toFloat() / auditTotal).coerceIn(0f, 1f) else 0f
+                            LinearProgressIndicator(
+                                progress = { progressFraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = AccentCyan,
+                                trackColor = Color(0x30FFFFFF)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                } else if (auditSummary != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x2810B981))
+                            .border(1.dp, CorrectGreen, RoundedCornerShape(16.dp))
+                            .padding(14.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "Verified",
+                                tint = CorrectGreen,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "AI Verified & Corrected for Import",
+                                    color = CorrectGreen,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "${auditSummary?.totalQuestionsAudited} questions verified. ${auditSummary?.correctedCount} answers corrected with high confidence.",
+                                    color = Color(0xFF6EE7B7),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                } else {
+                    GlassSecondaryButton(
+                        text = "Verify & Auto-Correct with AI",
+                        onClick = {
+                            val schema = validatedSchema ?: return@GlassSecondaryButton
+                            isAuditing = true
+                            auditJob = scope.launch {
+                                try {
+                                    val res = aiManager.auditQuiz(schema) { cur, tot, q ->
+                                        auditCurrent = cur
+                                        auditTotal = tot
+                                        auditCurrentQuestion = q
+                                    }
+                                    if (res.isSuccess) {
+                                        val (auditedSchema, summary) = res.getOrThrow()
+                                        validatedSchema = auditedSchema
+                                        auditSummary = summary
+                                    }
+                                } catch (e: Exception) {
+                                    // continue safely
+                                } finally {
+                                    isAuditing = false
+                                }
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+            }
 
             // Import Button
             GlassPrimaryButton(

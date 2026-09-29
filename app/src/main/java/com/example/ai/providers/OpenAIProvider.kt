@@ -79,7 +79,7 @@ class OpenAIProvider(
     ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
         val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
         callOpenAiChat(prompt, config, jsonMode = true).map { text ->
-            AIPromptBuilder.parseQuestionAudit(question.id, text)
+            AIPromptBuilder.parseQuestionAudit(question, text)
         }
     }
 

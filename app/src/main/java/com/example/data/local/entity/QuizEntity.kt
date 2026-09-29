@@ -21,5 +21,11 @@ data class QuizEntity(
     val lastPlayedAt: Long? = null,
     val totalAttempts: Int = 0,
     val bestScore: Int? = null,
-    val maxPossibleScore: Int = 0
+    val maxPossibleScore: Int = 0,
+    val isAiVerified: Boolean = false,
+    val lastVerifiedAt: Long? = null,
+    val verifiedQuestionCount: Int = 0,
+    val correctedQuestionCount: Int = 0,
+    val verificationSummary: String? = null,
+    val auditLogJson: String? = null
 )

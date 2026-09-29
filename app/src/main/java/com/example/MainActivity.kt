@@ -199,14 +199,19 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                 }
                 is Screen.QuizDetail -> {
                     val quiz = allQuizzes.find { it.id == screen.quizId }
+                    val auditProgress by viewModel.auditProgressState.collectAsState()
                     if (quiz != null) {
                         QuizDetailScreen(
                             quiz = quiz,
+                            auditProgress = auditProgress,
                             onBackClick = { viewModel.navigateTo(Screen.Quizzes) },
                             onStartMode = { mode -> viewModel.startQuiz(quiz.id, mode, resume = false) },
                             onToggleFavorite = { viewModel.toggleFavorite(quiz.id, quiz.isFavorite) },
                             onEditClick = { viewModel.navigateTo(Screen.QuizEditor(quiz.id)) },
-                            onExportClick = { viewModel.shareQuizJson(context, quiz.id) }
+                            onExportClick = { viewModel.shareQuizJson(context, quiz.id) },
+                            onAuditQuiz = { viewModel.auditQuiz(quiz.id) },
+                            onRevertAudit = { viewModel.revertQuizVerification(quiz.id) },
+                            onCancelAudit = { viewModel.cancelAudit() }
                         )
                     }
                 }
@@ -256,7 +261,8 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                     ImportQuizScreen(
                         onBackClick = { viewModel.navigateTo(Screen.Home) },
                         onImportSuccess = { newId -> viewModel.navigateTo(Screen.QuizDetail(newId)) },
-                        onSaveQuiz = { schema -> viewModel.saveQuiz(schema) }
+                        onSaveQuiz = { schema -> viewModel.saveQuiz(schema) },
+                        aiManager = viewModel.aiManager
                     )
                 }
                 is Screen.QuizEditor -> {
@@ -267,7 +273,8 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                         onSaveQuiz = { schema ->
                             viewModel.saveQuiz(schema, existing?.id)
                             viewModel.navigateTo(Screen.Quizzes)
-                        }
+                        },
+                        aiManager = viewModel.aiManager
                     )
                 }
                 is Screen.Statistics -> {

@@ -45,7 +45,14 @@ data class ActiveQuestion(
     val fillBlankAnswer: String,
     val acceptedAnswers: List<String>,
     val points: Int,
-    val explanation: String?
+    val explanation: String?,
+    val isAiVerified: Boolean = false,
+    val wasAnswerCorrected: Boolean = false,
+    val originalAnswerDisplay: String? = null,
+    val verifiedAnswerDisplay: String? = null,
+    val correctionReason: String? = null,
+    val verificationConfidence: Double = 0.0,
+    val needsReview: Boolean = false
 ) {
     val hasConfiguredAnswer: Boolean
         get() = if (type == QuestionType.FILL_BLANK) {
@@ -115,8 +122,8 @@ class QuizEngine(
 
         questions = rawQuestions.map { q ->
             if (q.type == QuestionType.FILL_BLANK) {
-                val cleanedAccepted = q.acceptedAnswers.filter { it.isNotBlank() }
-                val primaryAnswer = q.fillBlankAnswer.trim().ifEmpty { cleanedAccepted.firstOrNull() ?: "" }
+                val cleanedAccepted = q.effectiveAcceptedAnswers.filter { it.isNotBlank() }
+                val primaryAnswer = q.effectiveFillBlankAnswer.trim().ifEmpty { cleanedAccepted.firstOrNull() ?: "" }
                 val allAccepted = mutableListOf<String>()
                 if (primaryAnswer.isNotEmpty()) {
                     allAccepted.add(primaryAnswer)
@@ -127,6 +134,9 @@ class QuizEngine(
                     }
                 }
 
+                val origDisplay = q.fillBlankAnswer.ifBlank { q.acceptedAnswers.firstOrNull().orEmpty() }
+                val verDisplay = q.effectiveFillBlankAnswer
+
                 ActiveQuestion(
                     id = q.id,
                     type = QuestionType.FILL_BLANK,
@@ -136,28 +146,47 @@ class QuizEngine(
                     fillBlankAnswer = primaryAnswer,
                     acceptedAnswers = allAccepted,
                     points = q.points,
-                    explanation = q.explanation
+                    explanation = q.effectiveExplanation,
+                    isAiVerified = q.isVerified,
+                    wasAnswerCorrected = q.wasAnswerCorrected,
+                    originalAnswerDisplay = origDisplay,
+                    verifiedAnswerDisplay = verDisplay,
+                    correctionReason = q.verificationReason,
+                    verificationConfidence = q.verificationConfidence,
+                    needsReview = q.needsReview
                 )
             } else {
-                val indexedOptions = q.options.mapIndexed { index, text -> index to text }
+                val optionsSource = q.effectiveOptions
+                val targetAnswer = q.effectiveAnswerIndex
+                val indexedOptions = optionsSource.mapIndexed { index, text -> index to text }
                 val finalIndexedOptions = if (quizSchema.shuffleOptions) {
                     indexedOptions.shuffled()
                 } else {
                     indexedOptions
                 }
                 val finalOptions = finalIndexedOptions.map { it.second }
-                val finalCorrectIndex = finalIndexedOptions.indexOfFirst { it.first == q.answer }
+                val finalCorrectIndex = finalIndexedOptions.indexOfFirst { it.first == targetAnswer }
+
+                val origOptText = q.options.getOrNull(q.answer) ?: "Option ${q.answer + 1}"
+                val verOptText = optionsSource.getOrNull(targetAnswer) ?: "Option ${targetAnswer + 1}"
 
                 ActiveQuestion(
                     id = q.id,
                     type = QuestionType.MCQ,
                     questionText = q.question,
                     options = finalOptions,
-                    correctAnswerIndex = finalCorrectIndex,
+                    correctAnswerIndex = if (finalCorrectIndex != -1) finalCorrectIndex else -1,
                     fillBlankAnswer = "",
                     acceptedAnswers = emptyList(),
                     points = q.points,
-                    explanation = q.explanation
+                    explanation = q.effectiveExplanation,
+                    isAiVerified = q.isVerified,
+                    wasAnswerCorrected = q.wasAnswerCorrected,
+                    originalAnswerDisplay = "${(q.answer + 'A'.code).toChar()}. $origOptText",
+                    verifiedAnswerDisplay = "${(targetAnswer + 'A'.code).toChar()}. $verOptText",
+                    correctionReason = q.verificationReason,
+                    verificationConfidence = q.verificationConfidence,
+                    needsReview = q.needsReview
                 )
             }
         }
@@ -911,7 +940,14 @@ class QuizEngine(
                     acceptedAnswers = q.acceptedAnswers,
                     isAnswerNotSet = isAnswerNotSet,
                     banglaExplanation = questionStates[index]?.banglaExplanation,
-                    questionId = q.id
+                    questionId = q.id,
+                    isAiVerified = q.isAiVerified,
+                    wasAnswerCorrected = q.wasAnswerCorrected,
+                    originalAnswerDisplay = q.originalAnswerDisplay,
+                    verifiedAnswerDisplay = q.verifiedAnswerDisplay,
+                    correctionReason = q.correctionReason,
+                    verificationConfidence = q.verificationConfidence,
+                    needsReview = q.needsReview
                 )
             )
         }

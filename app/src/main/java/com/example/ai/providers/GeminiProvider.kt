@@ -79,7 +79,7 @@ class GeminiProvider(
     ): Result<QuestionAuditResult> = withContext(Dispatchers.IO) {
         val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
         callJsonApi(prompt, config).map { raw ->
-            AIPromptBuilder.parseQuestionAudit(question.id, raw)
+            AIPromptBuilder.parseQuestionAudit(question, raw)
         }
     }
 
