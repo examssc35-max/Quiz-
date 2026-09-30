@@ -1062,7 +1062,7 @@ class QuizEngineTest {
                         isCorrect = true,
                         confidence = 0.99,
                         matchedAnswer = "element",
-                        banglaExplanation = "তোমার উত্তরটি সঠিক। 'element' শব্দটি এই বাক্যে অর্থ ও grammar অনুযায়ী উপযুক্তভাবে বসে।",
+                        banglaExplanation = "তোমার উত্তরটি সঠিক। বাক্যের এই স্থানে “element” শব্দটিই সঠিকভাবে বসে এবং বাক্যের অর্থ ঠিক থাকে।",
                         reason = "Exact match fitting correctly in sentence context"
                     )
                 )
@@ -1091,12 +1091,147 @@ class QuizEngineTest {
         assertNotNull(feedback)
         assertTrue(feedback!!.isCorrect)
         assertEquals(5, engine.score)
-        assertTrue("AI evaluator must be called for every submitted answer in real time", aiCalled)
+        // Step 1 Deterministic exact match has highest priority: AI must NOT be called
+        assertFalse("AI evaluator must NOT be called for exact match", aiCalled)
         assertNotNull(feedback.banglaExplanation)
-        assertEquals(
-            "তোমার উত্তরটি সঠিক। 'element' শব্দটি এই বাক্যে অর্থ ও grammar অনুযায়ী উপযুক্তভাবে বসে।",
-            feedback.banglaExplanation
-        )
+        assertTrue(feedback.banglaExplanation!!.contains("element"))
+    }
+
+    @Test
+    fun testProblem1_ExactMatchNeverOverriddenByAi_MarkedCorrect() = kotlinx.coroutines.runBlocking {
+        var aiCalled = false
+        // Even if a faulty evaluator returns isCorrect = false, Step 1 or Step 5 safety override guarantees CORRECT
+        val buggyEvaluator = object : com.example.engine.AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<com.example.data.model.AiEvaluationResult> {
+                aiCalled = true
+                return Result.success(
+                    com.example.data.model.AiEvaluationResult(
+                        isCorrect = false,
+                        confidence = 0.50,
+                        matchedAnswer = "daily",
+                        verifiedAnswer = "daily",
+                        explanation_bn = "ভুল",
+                        banglaExplanation = "ভুল"
+                    )
+                )
+            }
+        }
+
+        val json = """
+            {
+              "title": "Daily Bug Reproduction Test",
+              "questions": [
+                {
+                  "id": "q_daily",
+                  "type": "fill_blank",
+                  "question": "Exercise should be done on a ______ basis.",
+                  "answer": ["daily"],
+                  "points": 5
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+        val engine = QuizEngine("daily_test", schema, QuizMode.PRACTICE, aiEvaluator = buggyEvaluator)
+
+        val feedback = engine.submitPracticeFillBlankAnswer("daily")
+        assertNotNull(feedback)
+        assertTrue("Student entering 'daily' when accepted is 'daily' MUST be marked CORRECT!", feedback!!.isCorrect)
+        assertEquals(5, engine.score)
+        assertEquals(1, engine.streak)
+        assertFalse("AI must not be called when exact match proves correctness", aiCalled)
+        assertTrue(feedback.banglaExplanation!!.contains("daily"))
+    }
+
+    @Test
+    fun testMultipleAcceptedAnswers_AllEvaluatedCorrectly() = kotlinx.coroutines.runBlocking {
+        var aiCalledCount = 0
+        val mockEvaluator = object : com.example.engine.AiAnswerEvaluator {
+            override suspend fun evaluateAnswer(
+                questionText: String,
+                acceptedAnswers: List<String>,
+                userAnswer: String
+            ): Result<com.example.data.model.AiEvaluationResult> {
+                aiCalledCount++
+                return Result.success(
+                    com.example.data.model.AiEvaluationResult(
+                        isCorrect = false,
+                        confidence = 0.90,
+                        matchedAnswer = "reducing",
+                        explanation_bn = "তোমার উত্তর “leasing” এখানে উপযুক্ত নয়।"
+                    )
+                )
+            }
+        }
+
+        val json = """
+            {
+              "title": "Multiple Answers Test",
+              "questions": [
+                {
+                  "id": "q_multi",
+                  "type": "fill_blank",
+                  "question": "We can protect nature by ______ waste.",
+                  "answer": ["reducing", "limiting"],
+                  "points": 10
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+
+        // 1. First accepted answer "reducing"
+        val engine1 = QuizEngine("m1", schema, QuizMode.PRACTICE, aiEvaluator = mockEvaluator)
+        val fb1 = engine1.submitPracticeFillBlankAnswer("reducing")
+        assertNotNull(fb1)
+        assertTrue("First accepted answer must be correct", fb1!!.isCorrect)
+
+        // 2. Second accepted answer "limiting"
+        val engine2 = QuizEngine("m2", schema, QuizMode.PRACTICE, aiEvaluator = mockEvaluator)
+        val fb2 = engine2.submitPracticeFillBlankAnswer("limiting")
+        assertNotNull(fb2)
+        assertTrue("Second accepted answer must also be correct without AI", fb2!!.isCorrect)
+
+        // 3. Different word "leasing" requires AI evaluation
+        val engine3 = QuizEngine("m3", schema, QuizMode.PRACTICE, aiEvaluator = mockEvaluator)
+        val fb3 = engine3.submitPracticeFillBlankAnswer("leasing")
+        assertNotNull(fb3)
+        assertFalse("Different word should be evaluated by AI and marked incorrect", fb3!!.isCorrect)
+        assertEquals(1, aiCalledCount)
+    }
+
+    @Test
+    fun testSafeNormalization_HarmfulPunctuationAndCaseInsensitivity() = kotlinx.coroutines.runBlocking {
+        val json = """
+            {
+              "title": "Normalization Test",
+              "questions": [
+                {
+                  "id": "q_norm",
+                  "type": "fill_blank",
+                  "question": "Read ______ newspaper.",
+                  "answer": ["daily"],
+                  "points": 5
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val schema = QuizJsonParser.validateAndParse(json).getOrThrow()
+
+        val variations = listOf("Daily", "DAILY", "  daily  ", "\"daily\"", "daily.")
+        for (v in variations) {
+            val engine = QuizEngine("norm_$v", schema, QuizMode.PRACTICE)
+            val fb = engine.submitPracticeFillBlankAnswer(v)
+            assertNotNull("Variation '$v' must evaluate", fb)
+            assertTrue("Variation '$v' must be marked CORRECT", fb!!.isCorrect)
+        }
     }
 
     @Test

@@ -78,6 +78,7 @@ fun GlassFillBlankInput(
 
     val isPractice = mode == QuizMode.PRACTICE
     val isAnswerNotSet = answerState == AnswerState.ANSWER_NOT_SET || (!hasConfiguredAnswer && isAnswered)
+    val isAiUnavailable = answerState == AnswerState.AI_UNAVAILABLE
     val isCorrect = isAnswered && answerState == AnswerState.CORRECT && hasConfiguredAnswer && !isAiEvaluating
     val isIncorrect = isAnswered && answerState == AnswerState.INCORRECT && hasConfiguredAnswer && !isAiEvaluating
 
@@ -86,6 +87,7 @@ fun GlassFillBlankInput(
         targetValue = when {
             isPractice && isAiEvaluating -> Color(0x280284C7)
             isPractice && isCorrect -> CorrectGreenBg
+            isPractice && isAiUnavailable -> Color(0x28F59E0B)
             isPractice && isIncorrect -> WrongRedBg
             isPractice && isAnswerNotSet && isAnswered -> Color(0x221E293B)
             !isPractice && userAnswerText.isNotBlank() -> Color(0x3D2563EB)
@@ -95,11 +97,22 @@ fun GlassFillBlankInput(
         label = "fill_blank_bg"
     )
 
+    // Compute display accepted answers and actual correctness to prevent contradictory UI state
+    val displayAnswers = if (acceptedAnswers.isNotEmpty()) {
+        acceptedAnswers
+    } else if (correctAnswerText.isNotBlank()) {
+        listOf(correctAnswerText)
+    } else {
+        emptyList()
+    }
+    val isActuallyCorrect = isCorrect || (displayAnswers.isNotEmpty() && com.example.data.model.AnswerComparison.isAnswerCorrect(userAnswerText, displayAnswers))
+
     // Border stroke
     val borderStroke = when {
         isPractice && isAiEvaluating -> BorderStroke(2.dp, Brush.linearGradient(listOf(AccentCyan, Color(0xFF3B82F6))))
-        isPractice && isCorrect -> BorderStroke(2.dp, CorrectGreenBorder)
-        isPractice && isIncorrect -> BorderStroke(2.dp, WrongRedBorder)
+        isPractice && isActuallyCorrect -> BorderStroke(2.dp, CorrectGreenBorder)
+        isPractice && isAiUnavailable -> BorderStroke(1.5.dp, Color(0xFFF59E0B))
+        isPractice && isIncorrect && !isActuallyCorrect -> BorderStroke(2.dp, WrongRedBorder)
         isPractice && isAnswerNotSet && isAnswered -> BorderStroke(1.5.dp, Color(0x8038BDF8))
         !isPractice && userAnswerText.isNotBlank() -> BorderStroke(
             2.dp,
@@ -190,12 +203,41 @@ fun GlassFillBlankInput(
                                     )
                                 }
                             }
+                        } else if (isAiUnavailable) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x33F59E0B))
+                                    .border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFBBF24),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isBengali) "⚠️ AI সংযোগ সমস্যা (Needs Review)" else "⚠️ AI Unavailable (Needs Review)",
+                                        color = Color(0xFFFDE68A),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         } else {
-                            val pillBg = if (isCorrect) CorrectGreenBg else WrongRedBg
-                            val pillBorder = if (isCorrect) CorrectGreenBorder else WrongRedBorder
-                            val pillTextColor = if (isCorrect) Color(0xFF6EE7B7) else Color(0xFFFCA5A5)
-                            val statusText = if (isCorrect) {
-                                if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct"
+                            val isActuallyCorrect = isCorrect || (displayAnswers.isNotEmpty() && com.example.data.model.AnswerComparison.isAnswerCorrect(userAnswerText, displayAnswers))
+                            val pillBg = if (isActuallyCorrect) CorrectGreenBg else WrongRedBg
+                            val pillBorder = if (isActuallyCorrect) CorrectGreenBorder else WrongRedBorder
+                            val pillTextColor = if (isActuallyCorrect) Color(0xFF6EE7B7) else Color(0xFFFCA5A5)
+                            val statusText = if (isActuallyCorrect) {
+                                if (isAlternativeAccepted) {
+                                    if (isBengali) "✓ বিকল্প সঠিক উত্তর" else "✓ Valid Alternative"
+                                } else {
+                                    if (isBengali) "✓ সঠিক উত্তর" else "✓ Correct"
+                                }
                             } else {
                                 if (isBengali) "✕ ভুল উত্তর" else "✕ Incorrect"
                             }
@@ -209,9 +251,9 @@ fun GlassFillBlankInput(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
-                                        imageVector = if (isCorrect) Icons.Default.Check else Icons.Default.Close,
+                                        imageVector = if (isActuallyCorrect) Icons.Default.Check else Icons.Default.Close,
                                         contentDescription = null,
-                                        tint = if (isCorrect) CorrectGreen else WrongRed,
+                                        tint = if (isActuallyCorrect) CorrectGreen else WrongRed,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
@@ -372,16 +414,8 @@ fun GlassFillBlankInput(
             )
         }
 
-        // Practice Mode: When answered & incorrect, show the accepted answer(s)
-        val displayAnswers = if (acceptedAnswers.isNotEmpty()) {
-            acceptedAnswers
-        } else if (correctAnswerText.isNotBlank()) {
-            listOf(correctAnswerText)
-        } else {
-            emptyList()
-        }
-
-        if (isPractice && isIncorrect && displayAnswers.isNotEmpty()) {
+        // Practice Mode: When answered & genuinely incorrect, show the accepted answer(s)
+        if (isPractice && isIncorrect && !isActuallyCorrect && displayAnswers.isNotEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

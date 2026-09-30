@@ -2,7 +2,11 @@ package com.example.engine
 
 import android.util.Log
 import com.example.BuildConfig
+import com.example.ai.AIPromptBuilder
+import com.example.ai.AnswerEvaluationRequest
+import com.example.ai.SmartNormalizer
 import com.example.data.model.AiEvaluationResult
+import com.example.data.model.QuestionType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -20,13 +24,25 @@ interface AiAnswerEvaluator {
         acceptedAnswers: List<String>,
         userAnswer: String
     ): Result<AiEvaluationResult>
+
+    suspend fun evaluateAnswerWithContext(
+        request: AnswerEvaluationRequest
+    ): Result<AiEvaluationResult> = evaluateAnswer(
+        questionText = request.questionText,
+        acceptedAnswers = request.acceptedAnswers,
+        userAnswer = request.userAnswer
+    )
 }
 
 /**
- * Real Gemini-powered AI Answer Evaluator for fill-in-the-blank questions.
- * Analyzes sentence meaning, context, grammar, part of speech, tense, singular/plural,
- * and whether the answer naturally replaces the blank.
- * Includes in-memory caching to avoid redundant API calls for the same answer.
+ * Real Gemini-powered Context-Aware Educational Answer Evaluator.
+ * Implements the 6-step evaluation pipeline:
+ * Step 1: Local exact/normalized comparison (bypasses AI call)
+ * Step 2: Local semantic-safe rules
+ * Step 3: AI contextual evaluation with complete sentence context
+ * Step 4: Simple, student-friendly Bangla explanation
+ * Step 5: Strict response validation & safety override
+ * Step 6: Final result
  */
 class GeminiAiAnswerEvaluator(
     private val apiKey: String = BuildConfig.GEMINI_API_KEY,
@@ -55,42 +71,103 @@ class GeminiAiAnswerEvaluator(
         acceptedAnswers: List<String>,
         userAnswer: String
     ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
-        val trimmedAnswer = userAnswer.trim()
-        val cacheKey = generateCacheKey(questionText, acceptedAnswers, trimmedAnswer)
+        val request = AnswerEvaluationRequest(
+            questionText = questionText,
+            acceptedAnswers = acceptedAnswers,
+            userAnswer = userAnswer,
+            questionType = QuestionType.FILL_BLANK
+        )
+        evaluateAnswerWithContext(request)
+    }
 
-        // Return cached result immediately if already evaluated
+    override suspend fun evaluateAnswerWithContext(
+        request: AnswerEvaluationRequest
+    ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
+        val trimmedAnswer = request.userAnswer.trim()
+        val allAccepted = request.acceptedAnswers.filter { it.isNotBlank() }.ifEmpty {
+            if (request.storedAnswer.isNotBlank()) listOf(request.storedAnswer) else emptyList()
+        }
+
+        // =========================================================================
+        // STEP 1 & STEP 2: Local exact / normalized comparison (Highest Priority)
+        // AI must NOT be called when a deterministic exact match already proves the answer is correct.
+        // =========================================================================
+        val (isExactOrNorm, matched) = SmartNormalizer.checkExactOrNormalizedMatch(trimmedAnswer, allAccepted)
+        if (isExactOrNorm && matched != null) {
+            val evalType = if (trimmedAnswer.equals(matched, ignoreCase = false)) "exact_match" else "normalized_match"
+            val expl = "তোমার উত্তরটি সঠিক। বাক্যের এই স্থানে “$matched” শব্দটিই সঠিকভাবে বসে এবং বাক্যের অর্থ ঠিক থাকে।"
+            val exactResult = AiEvaluationResult(
+                isCorrect = true,
+                confidence = 1.0,
+                evaluationType = evalType,
+                matchedAnswer = matched,
+                verifiedAnswer = matched,
+                needsReview = false,
+                explanation_bn = expl,
+                reason = "Deterministic exact/normalized match against verified accepted answer",
+                banglaExplanation = expl,
+                decision = "correct",
+                jsonAnswerCorrect = true
+            )
+            Log.d(TAG, "Step 1 exact match succeeded for: '$trimmedAnswer' -> '$matched'. Skipping AI call.")
+            return@withContext Result.success(exactResult)
+        }
+
+        val cacheKey = generateCacheKey(request.questionText, allAccepted, trimmedAnswer)
         evaluationCache[cacheKey]?.let { cached ->
             Log.d(TAG, "Returning cached evaluation for: $trimmedAnswer")
             return@withContext Result.success(cached)
         }
 
         if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
-            Log.w(TAG, "Gemini API key is not configured")
-            return@withContext Result.failure(IllegalStateException("Gemini API key is not configured"))
+            Log.w(TAG, "Gemini API key is not configured. Falling back to local evaluation.")
+            val fallback = SmartNormalizer.createLocalEvaluation(
+                questionText = request.questionText,
+                acceptedAnswers = allAccepted,
+                userAnswer = trimmedAnswer,
+                offlineNote = true,
+                evaluationType = "ai_unavailable"
+            )
+            return@withContext Result.success(fallback)
         }
 
         try {
-            val prompt = buildEvaluationPrompt(questionText, acceptedAnswers, trimmedAnswer)
+            val prompt = AIPromptBuilder.buildEvaluationPrompt(request)
             val requestBodyJson = buildRequestBody(prompt)
 
-            // Try primary model first, fallback to secondary if 404 or model not found
-            var result = callGeminiModel(PRIMARY_MODEL, requestBodyJson, acceptedAnswers)
+            var result = callGeminiModel(PRIMARY_MODEL, requestBodyJson, allAccepted, trimmedAnswer)
             val primaryErrorMsg = result.exceptionOrNull()?.message.orEmpty()
             if (result.isFailure && (primaryErrorMsg.contains("404") || primaryErrorMsg.contains("not found", ignoreCase = true))) {
                 Log.w(TAG, "Primary model unavailable, falling back to $FALLBACK_MODEL")
-                result = callGeminiModel(FALLBACK_MODEL, requestBodyJson, acceptedAnswers)
+                result = callGeminiModel(FALLBACK_MODEL, requestBodyJson, allAccepted, trimmedAnswer)
             }
 
             if (result.isSuccess) {
                 val evaluated = result.getOrThrow()
                 evaluationCache[cacheKey] = evaluated
+                result
+            } else {
+                val fallback = SmartNormalizer.createLocalEvaluation(
+                    questionText = request.questionText,
+                    acceptedAnswers = allAccepted,
+                    userAnswer = trimmedAnswer,
+                    offlineNote = true,
+                    evaluationType = "ai_unavailable"
+                )
+                Result.success(fallback)
             }
-
-            result
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             val exMsg = e.message.orEmpty()
             Log.e(TAG, "Error evaluating answer with AI: $exMsg", e)
-            Result.failure(Exception(if (exMsg.isBlank()) "Error evaluating answer with AI" else exMsg, e))
+            val fallback = SmartNormalizer.createLocalEvaluation(
+                questionText = request.questionText,
+                acceptedAnswers = allAccepted,
+                userAnswer = trimmedAnswer,
+                offlineNote = true,
+                evaluationType = "ai_unavailable"
+            )
+            Result.success(fallback)
         }
     }
 
@@ -189,7 +266,8 @@ class GeminiAiAnswerEvaluator(
     private fun callGeminiModel(
         modelName: String,
         jsonBody: String,
-        acceptedAnswers: List<String>
+        acceptedAnswers: List<String>,
+        userAnswer: String = ""
     ): Result<AiEvaluationResult> {
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
         val mediaType = "application/json; charset=utf-8".toMediaType()
@@ -229,7 +307,12 @@ class GeminiAiAnswerEvaluator(
                     }
 
                     val fallbackAnswer = acceptedAnswers.firstOrNull().orEmpty()
-                    val evaluationResult = AiEvaluationResult.fromJson(text, fallbackAnswer)
+                    val evaluationResult = AIPromptBuilder.parseEvaluationResponse(
+                        rawResponse = text,
+                        fallbackAcceptedAnswer = fallbackAnswer,
+                        userAnswer = userAnswer,
+                        acceptedAnswers = acceptedAnswers
+                    )
                     Result.success(evaluationResult)
                 } catch (e: Exception) {
                     val parseMsg = e.message.orEmpty()

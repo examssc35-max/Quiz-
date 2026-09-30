@@ -139,7 +139,14 @@ data class AnswerEvaluationRequest(
     val options: List<String> = emptyList(),
     val storedCorrectOptionIndex: Int = -1,
     val storedAnswer: String = acceptedAnswers.firstOrNull().orEmpty(),
-    val explanation: String? = null
+    val explanation: String? = null,
+    val subject: String? = null,
+    val category: String? = null,
+    val sourceContext: String? = null,
+    val completeSentence: String? = null,
+    val blankPosition: String? = null,
+    val surroundingText: String? = null,
+    val quizTitle: String? = null
 )
 
 data class ChatMessage(
@@ -209,11 +216,20 @@ data class QuestionAuditRecord(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+data class AiUsageStats(
+    val aiRequestsThisSession: Int = 0,
+    val cachedEvaluations: Int = 0,
+    val questionsEvaluatedWithoutAi: Int = 0,
+    val aiRequestsSaved: Int = 0
+)
+
 data class QuizAuditSummary(
     val quizId: String,
     val totalQuestionsAudited: Int,
     val correctedCount: Int,
     val needsReviewCount: Int,
     val auditRecords: List<QuestionAuditRecord> = emptyList(),
-    val auditedAt: Long = System.currentTimeMillis()
+    val auditedAt: Long = System.currentTimeMillis(),
+    val requiredNoAiCount: Int = 0,
+    val verifiedByAiCount: Int = 0
 )

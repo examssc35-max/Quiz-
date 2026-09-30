@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -249,20 +250,7 @@ fun AiPerformanceAnalysisCard(
 ) {
     var analysis by remember { mutableStateOf<AiResultAnalysis?>(null) }
     var isLoading by remember { mutableStateOf(false) }
-
-    LaunchedEffect(summary) {
-        if (aiManager != null) {
-            isLoading = true
-            try {
-                val res = aiManager.analyzeQuizResult(summary)
-                if (res.isSuccess) {
-                    analysis = res.getOrNull()
-                }
-            } finally {
-                isLoading = false
-            }
-        }
-    }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     GlassCard(
         modifier = modifier.fillMaxWidth(),
@@ -411,11 +399,42 @@ fun AiPerformanceAnalysisCard(
                     fontStyle = FontStyle.Italic
                 )
             } else {
-                Text(
-                    text = "কুইজ সমাপ্ত হয়েছে। আরও ভালো প্রস্তুতির জন্য রিভিউ অ্যানসার দেখুন।",
-                    color = TextMuted,
-                    fontSize = 13.sp
-                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "ক্লাউড এআই দিয়ে আপনার উত্তরগুলোর দুর্বলতা ও সবল দিক বিশ্লেষণ করতে নিচের বাটনে চাপ দিন।",
+                        color = TextMuted,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    GlassSecondaryButton(
+                        text = "Generate AI Insights (পারফরম্যান্স বিশ্লেষণ)",
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        onClick = {
+                            if (aiManager != null) {
+                                isLoading = true
+                                scope.launch {
+                                    try {
+                                        val res = aiManager.analyzeQuizResult(summary)
+                                        if (res.isSuccess) {
+                                            analysis = res.getOrNull()
+                                        }
+                                    } finally {
+                                        isLoading = false
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     }

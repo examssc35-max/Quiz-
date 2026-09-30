@@ -13,7 +13,14 @@ import com.example.data.model.QuestionSchema
 import com.example.data.model.QuestionType
 import com.example.data.model.QuizResultSummary
 import com.example.engine.AiAnswerEvaluator
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 
@@ -27,10 +34,44 @@ class AIManager(
 
     companion object {
         private const val TAG = "AIManager"
+        private const val PROMPT_VERSION = "v2_cloud_smart"
 
         // In-memory cache across questions and sessions
         private val evaluationCache = ConcurrentHashMap<String, AiEvaluationResult>()
         private val auditCache = ConcurrentHashMap<String, QuestionAuditResult>()
+
+        // In-flight request deduplication map to prevent multiple identical requests
+        private val inFlightEvaluations = ConcurrentHashMap<String, Deferred<Result<AiEvaluationResult>>>()
+
+        // Observable AI Usage Stats (Requirement 26)
+        private val _usageStats = MutableStateFlow(AiUsageStats())
+        val usageStats: StateFlow<AiUsageStats> = _usageStats.asStateFlow()
+
+        fun recordNonAiEvaluation(count: Int = 1) {
+            _usageStats.update {
+                it.copy(
+                    questionsEvaluatedWithoutAi = it.questionsEvaluatedWithoutAi + count,
+                    aiRequestsSaved = it.aiRequestsSaved + count
+                )
+            }
+        }
+
+        fun recordCachedEvaluation(count: Int = 1) {
+            _usageStats.update {
+                it.copy(
+                    cachedEvaluations = it.cachedEvaluations + count,
+                    aiRequestsSaved = it.aiRequestsSaved + count
+                )
+            }
+        }
+
+        fun recordAiRequest(count: Int = 1) {
+            _usageStats.update {
+                it.copy(
+                    aiRequestsThisSession = it.aiRequestsThisSession + count
+                )
+            }
+        }
 
         @Volatile
         private var INSTANCE: AIManager? = null
@@ -89,77 +130,163 @@ class AIManager(
         evaluateDetailed(request)
     }
 
+    override suspend fun evaluateAnswerWithContext(
+        request: AnswerEvaluationRequest
+    ): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
+        evaluateDetailed(request)
+    }
+
     suspend fun evaluateDetailed(request: AnswerEvaluationRequest): Result<AiEvaluationResult> = withContext(Dispatchers.IO) {
         val trimmedAnswer = request.userAnswer.trim()
+        val allAccepted = request.acceptedAnswers.filter { it.isNotBlank() }.ifEmpty {
+            if (request.storedAnswer.isNotBlank()) listOf(request.storedAnswer) else emptyList()
+        }
+
+        // =========================================================================
+        // STEP 1 & STEP 2: Local exact / normalized comparison & semantic-safe rules
+        // Deterministic exact match has HIGHEST PRIORITY. AI must NOT be called.
+        // =========================================================================
+        val (isExactOrNorm, matched) = SmartNormalizer.checkExactOrNormalizedMatch(trimmedAnswer, allAccepted)
+        if (isExactOrNorm && matched != null) {
+            recordNonAiEvaluation()
+            val evalType = if (trimmedAnswer.equals(matched, ignoreCase = false)) "exact_match" else "normalized_match"
+            val expl = "তোমার উত্তরটি সঠিক। বাক্যের এই স্থানে “$matched” শব্দটিই সঠিকভাবে বসে এবং বাক্যের অর্থ ঠিক থাকে।"
+            val exactResult = AiEvaluationResult(
+                isCorrect = true,
+                confidence = 1.0,
+                evaluationType = evalType,
+                matchedAnswer = matched,
+                verifiedAnswer = matched,
+                needsReview = false,
+                explanation_bn = expl,
+                reason = "Deterministic exact/normalized match against verified accepted answer",
+                banglaExplanation = expl,
+                decision = "correct",
+                jsonAnswerCorrect = true
+            )
+            Log.d(TAG, "Step 1 exact/normalized match succeeded for: '$trimmedAnswer' -> '$matched'. Skipping AI call.")
+            return@withContext Result.success(exactResult)
+        }
+
         val config = getCurrentConfig()
 
         val cacheKey = generateCacheKey(
-            request.questionText,
-            request.acceptedAnswers,
-            trimmedAnswer,
-            config.providerType,
-            config.effectiveModel
+            questionText = request.questionText,
+            acceptedAnswers = allAccepted,
+            userAnswer = trimmedAnswer,
+            providerType = config.providerType,
+            model = config.effectiveModel,
+            questionType = request.questionType,
+            storedAnswer = request.storedAnswer,
+            options = request.options
         )
 
+        // =========================================================================
+        // STEP 3: Smart AI Cache (Requirement 13)
+        // =========================================================================
         evaluationCache[cacheKey]?.let { cached ->
+            recordCachedEvaluation()
             Log.d(TAG, "Returning cached evaluation for: $trimmedAnswer")
             return@withContext Result.success(cached)
         }
 
         // 1. If AI is toggled OFF in settings, evaluate via smart local normalization
         if (!config.enabled) {
+            recordNonAiEvaluation()
             Log.d(TAG, "AI is disabled by user settings. Using smart local evaluation.")
             val localResult = SmartNormalizer.createLocalEvaluation(
                 questionText = request.questionText,
-                acceptedAnswers = request.acceptedAnswers,
+                acceptedAnswers = allAccepted,
                 userAnswer = trimmedAnswer,
-                offlineNote = true
+                offlineNote = true,
+                evaluationType = "ai_unavailable"
             )
             return@withContext Result.success(localResult)
         }
 
         // 2. If no API key is configured for the provider, fall back gracefully
         if (!config.isKeyConfigured && config.providerType != AIProviderType.CUSTOM) {
+            recordNonAiEvaluation()
             Log.w(TAG, "No API key configured for ${config.providerType.displayName}. Falling back to smart normalizer.")
             val localResult = SmartNormalizer.createLocalEvaluation(
                 questionText = request.questionText,
-                acceptedAnswers = request.acceptedAnswers,
+                acceptedAnswers = allAccepted,
                 userAnswer = trimmedAnswer,
-                offlineNote = true
+                offlineNote = true,
+                evaluationType = "ai_unavailable"
             )
             return@withContext Result.success(localResult)
         }
 
-        // 3. Dispatch to selected AI Provider
+        // =========================================================================
+        // STEP 4: In-flight Request Deduplication (Requirement 20)
+        // =========================================================================
+        val inFlight = inFlightEvaluations[cacheKey]
+        if (inFlight != null) {
+            Log.d(TAG, "Reusing in-flight AI evaluation for: $trimmedAnswer")
+            return@withContext inFlight.await()
+        }
+
         val provider = providers[config.providerType] ?: providers.getValue(AIProviderType.GEMINI)
 
-        try {
-            val providerResult = provider.evaluateAnswer(request, config)
+        // =========================================================================
+        // STEP 5: Controlled Retries & Real Cloud AI Request (Requirements 18 & 19)
+        // =========================================================================
+        val deferred = async(Dispatchers.IO) {
+            recordAiRequest()
+            var attempts = 0
+            val maxRetries = 2
+            var lastError: Throwable? = null
 
-            if (providerResult.isSuccess) {
-                val eval = providerResult.getOrThrow()
-                evaluationCache[cacheKey] = eval
-                Result.success(eval)
-            } else {
-                val err = providerResult.exceptionOrNull()
-                Log.w(TAG, "Provider ${config.providerType.displayName} returned failure: ${err?.message}")
-                val fallbackResult = SmartNormalizer.createLocalEvaluation(
-                    questionText = request.questionText,
-                    acceptedAnswers = request.acceptedAnswers,
-                    userAnswer = trimmedAnswer,
-                    offlineNote = true
-                )
-                Result.success(fallbackResult)
+            while (attempts <= maxRetries) {
+                try {
+                    val providerResult = provider.evaluateAnswer(request, config)
+                    if (providerResult.isSuccess) {
+                        val rawEval = providerResult.getOrThrow()
+                        val validated = AIPromptBuilder.validateAndHardenEvaluation(
+                            parsedResult = rawEval,
+                            userAnswer = trimmedAnswer,
+                            acceptedAnswers = allAccepted,
+                            fallbackAnswer = request.storedAnswer
+                        )
+                        evaluationCache[cacheKey] = validated
+                        return@async Result.success(validated)
+                    } else {
+                        val err = providerResult.exceptionOrNull()
+                        lastError = err
+                        val msg = err?.message.orEmpty()
+                        if (msg.contains("400") || msg.contains("401") || msg.contains("403") || msg.contains("404")) {
+                            break // Permanent error, no retry
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    lastError = e
+                }
+                attempts++
+                if (attempts <= maxRetries) {
+                    val delayMs = 500L * (1 shl (attempts - 1))
+                    delay(delayMs)
+                }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Exception during AI evaluation with ${config.providerType.displayName}", e)
+
+            // Failure handling (Requirement 18: AI Failure must NEVER mean wrong)
+            Log.w(TAG, "AI evaluation failed after $attempts attempt(s): ${lastError?.message}")
             val fallbackResult = SmartNormalizer.createLocalEvaluation(
                 questionText = request.questionText,
-                acceptedAnswers = request.acceptedAnswers,
+                acceptedAnswers = allAccepted,
                 userAnswer = trimmedAnswer,
-                offlineNote = true
+                offlineNote = true,
+                evaluationType = "ai_unavailable"
             )
             Result.success(fallbackResult)
+        }
+
+        inFlightEvaluations[cacheKey] = deferred
+        try {
+            deferred.await()
+        } finally {
+            inFlightEvaluations.remove(cacheKey)
         }
     }
 
@@ -177,6 +304,7 @@ class AIManager(
 
         val provider = providers[config.providerType] ?: providers.getValue(AIProviderType.GEMINI)
         try {
+            recordAiRequest()
             val result = provider.chatFollowUp(context, history, userMessage, config)
             if (result.isSuccess) {
                 result
@@ -197,6 +325,7 @@ class AIManager(
 
         val provider = providers[config.providerType] ?: providers.getValue(AIProviderType.GEMINI)
         try {
+            recordAiRequest()
             val res = provider.analyzeQuizResult(summary, config)
             if (res.isSuccess) res else Result.success(generateLocalResultAnalysis(summary))
         } catch (e: Exception) {
@@ -212,17 +341,28 @@ class AIManager(
 
         val cacheKey = "${config.providerType.id}::${config.effectiveModel}::${question.type}::${question.question.trim()}::${question.options.joinToString("||")}::${question.answer}::${question.fillBlankAnswer}"
         auditCache[cacheKey]?.let { cached ->
+            recordCachedEvaluation()
             Log.d(TAG, "Returning cached question audit for: ${question.id}")
             return@withContext Result.success(cached)
         }
 
+        // Check locally first (Requirement 2 & 24)
+        val (isSuspicious, issue) = AIPromptBuilder.isQuestionSuspiciousLocally(question)
+        if (!isSuspicious) {
+            recordNonAiEvaluation()
+            val localClean = AIPromptBuilder.generateLocalDeterministicAudit(question)
+            return@withContext Result.success(localClean)
+        }
+
         if (!config.enabled || (!config.isKeyConfigured && config.providerType != AIProviderType.CUSTOM)) {
+            recordNonAiEvaluation()
             val localResult = generateLocalQuestionAudit(question)
             return@withContext Result.success(localResult)
         }
 
         val provider = providers[config.providerType] ?: providers.getValue(AIProviderType.GEMINI)
         try {
+            recordAiRequest()
             val providerResult = provider.auditQuestion(question, config)
             if (providerResult.isSuccess) {
                 val auditRes = providerResult.getOrThrow()
@@ -241,28 +381,85 @@ class AIManager(
     }
 
     /**
-     * Audits an entire quiz asynchronously on Dispatchers.IO, updating progress after each question.
-     * Applies safe corrections (confidence >= 0.90) and generates an audit log.
+     * Requirement 2, 12, 24: "Smart AI Verify"
+     * 1. Inspects quiz deterministically first.
+     * 2. Identifies suspicious/uncertain questions.
+     * 3. Skips clean questions that require NO AI.
+     * 4. Batches suspicious questions to Real Cloud AI.
+     * 5. Applies high-confidence corrections (>= 0.90).
+     * 6. Produces rich audit summary with counts.
      */
     suspend fun auditQuiz(
         quiz: com.example.data.model.QuizSchema,
         onProgress: (verifiedCount: Int, totalCount: Int, currentQuestionText: String) -> Unit = { _, _, _ -> }
     ): Result<Pair<com.example.data.model.QuizSchema, QuizAuditSummary>> = withContext(Dispatchers.IO) {
+        val total = quiz.questions.size
+        if (total == 0) {
+            return@withContext Result.success(Pair(quiz, QuizAuditSummary(quiz.title.hashCode().toString(), 0, 0, 0)))
+        }
+
+        val config = getCurrentConfig()
+
+        // 1. Deterministic Local Inspection: Separate clean questions from suspicious ones
+        val cleanResults = mutableMapOf<String, QuestionAuditResult>()
+        val suspiciousQuestions = mutableListOf<QuestionSchema>()
+
+        quiz.questions.forEach { q ->
+            val (isSuspicious, _) = AIPromptBuilder.isQuestionSuspiciousLocally(q)
+            if (!isSuspicious) {
+                cleanResults[q.id] = AIPromptBuilder.generateLocalDeterministicAudit(q)
+            } else {
+                suspiciousQuestions.add(q)
+            }
+        }
+
+        recordNonAiEvaluation(cleanResults.size)
+        var auditedSoFar = cleanResults.size
+        onProgress(auditedSoFar, total, if (suspiciousQuestions.isEmpty()) "All questions verified locally!" else "Inspecting uncertain questions...")
+
+        // 2. Batch Cloud AI Requests for Suspicious Questions
+        val suspiciousResults = mutableMapOf<String, QuestionAuditResult>()
+
+        if (suspiciousQuestions.isNotEmpty()) {
+            if (config.enabled && (config.isKeyConfigured || config.providerType == AIProviderType.CUSTOM)) {
+                val provider = providers[config.providerType] ?: providers.getValue(AIProviderType.GEMINI)
+                val batchSize = 5
+                val batches = suspiciousQuestions.chunked(batchSize)
+
+                for (batch in batches) {
+                    recordAiRequest()
+                    val batchRes = try {
+                        provider.auditQuestionsBatch(batch, config).getOrElse {
+                            batch.map { q -> generateLocalQuestionAudit(q) }
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        batch.map { q -> generateLocalQuestionAudit(q) }
+                    }
+
+                    batchRes.forEach { auditRes ->
+                        suspiciousResults[auditRes.questionId] = auditRes
+                    }
+                    auditedSoFar += batch.size
+                    onProgress(auditedSoFar.coerceAtMost(total), total, batch.firstOrNull()?.question.orEmpty())
+                }
+            } else {
+                suspiciousQuestions.forEach { q ->
+                    suspiciousResults[q.id] = generateLocalQuestionAudit(q)
+                    auditedSoFar++
+                    onProgress(auditedSoFar.coerceAtMost(total), total, q.question)
+                }
+            }
+        }
+
+        // 3. Assemble Audited Quiz & Summary
         val auditedQuestions = mutableListOf<QuestionSchema>()
         val records = mutableListOf<QuestionAuditRecord>()
         var correctedCount = 0
         var needsReviewCount = 0
 
-        val total = quiz.questions.size
-
-        quiz.questions.forEachIndexed { index, question ->
-            onProgress(index, total, question.question)
-
-            val auditRes = try {
-                auditQuestion(question).getOrElse { generateLocalQuestionAudit(question) }
-            } catch (e: Exception) {
-                generateLocalQuestionAudit(question)
-            }
+        quiz.questions.forEach { question ->
+            val auditRes = suspiciousResults[question.id] ?: cleanResults[question.id] ?: generateLocalQuestionAudit(question)
 
             if (auditRes.needsReview) {
                 needsReviewCount++
@@ -342,7 +539,6 @@ class AIManager(
             }
 
             auditedQuestions.add(updatedQuestion)
-            onProgress(index + 1, total, question.question)
         }
 
         val updatedSchema = quiz.copy(questions = auditedQuestions)
@@ -352,7 +548,9 @@ class AIManager(
             correctedCount = correctedCount,
             needsReviewCount = needsReviewCount,
             auditRecords = records,
-            auditedAt = System.currentTimeMillis()
+            auditedAt = System.currentTimeMillis(),
+            requiredNoAiCount = cleanResults.size,
+            verifiedByAiCount = suspiciousQuestions.size
         )
 
         Result.success(Pair(updatedSchema, summary))
@@ -416,9 +614,13 @@ class AIManager(
         acceptedAnswers: List<String>,
         userAnswer: String,
         providerType: AIProviderType,
-        model: String
+        model: String,
+        questionType: QuestionType = QuestionType.FILL_BLANK,
+        storedAnswer: String = "",
+        options: List<String> = emptyList()
     ): String {
-        return "${providerType.id}::$model::${questionText.trim().lowercase()}||${acceptedAnswers.joinToString(",").lowercase()}||${userAnswer.trim().lowercase()}"
+        val optKey = if (options.isNotEmpty()) options.joinToString("||") else ""
+        return "$PROMPT_VERSION::${providerType.id}::$model::${questionType.name}::${storedAnswer.trim().lowercase()}::${questionText.trim().lowercase()}||${acceptedAnswers.joinToString(",").lowercase()}||${optKey.lowercase()}||${userAnswer.trim().lowercase()}"
     }
 
     private fun generateLocalChatFallback(context: QuestionAiContext, userQuery: String): String {

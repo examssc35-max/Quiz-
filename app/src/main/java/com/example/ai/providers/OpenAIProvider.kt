@@ -49,7 +49,12 @@ class OpenAIProvider(
         val prompt = AIPromptBuilder.buildEvaluationPrompt(request)
         callOpenAiChat(prompt, config, jsonMode = true).map { text ->
             val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
-            AIPromptBuilder.parseEvaluationResponse(text, fallback)
+            AIPromptBuilder.parseEvaluationResponse(
+                rawResponse = text,
+                fallbackAcceptedAnswer = fallback,
+                userAnswer = request.userAnswer,
+                acceptedAnswers = request.acceptedAnswers
+            )
         }
     }
 
@@ -80,6 +85,20 @@ class OpenAIProvider(
         val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
         callOpenAiChat(prompt, config, jsonMode = true).map { text ->
             AIPromptBuilder.parseQuestionAudit(question, text)
+        }
+    }
+
+    override suspend fun auditQuestionsBatch(
+        questions: List<QuestionSchema>,
+        config: AIConfig
+    ): Result<List<QuestionAuditResult>> = withContext(Dispatchers.IO) {
+        if (questions.isEmpty()) return@withContext Result.success(emptyList())
+        if (questions.size == 1) {
+            return@withContext auditQuestion(questions[0], config).map { listOf(it) }
+        }
+        val prompt = AIPromptBuilder.buildBatchQuestionAuditPrompt(questions)
+        callOpenAiChat(prompt, config, jsonMode = true).map { text ->
+            AIPromptBuilder.parseBatchQuestionAuditResponse(text, questions)
         }
     }
 

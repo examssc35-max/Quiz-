@@ -29,5 +29,12 @@ interface AIProvider {
         config: AIConfig
     ): Result<QuestionAuditResult>
 
+    suspend fun auditQuestionsBatch(
+        questions: List<QuestionSchema>,
+        config: AIConfig
+    ): Result<List<QuestionAuditResult>> = runCatching {
+        questions.map { q -> auditQuestion(q, config).getOrThrow() }
+    }
+
     suspend fun testConnection(config: AIConfig): Result<String>
 }

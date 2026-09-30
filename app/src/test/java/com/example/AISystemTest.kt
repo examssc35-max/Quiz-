@@ -113,7 +113,7 @@ class AISystemTest {
         assertTrue(prompt.contains("elements"))
         assertTrue(prompt.contains("element"))
         assertTrue(prompt.contains("Singular / plural agreement"))
-        assertTrue(prompt.contains("banglaExplanation"))
+        assertTrue(prompt.contains("explanation_bn"))
     }
 
     @Test
@@ -499,5 +499,122 @@ class AISystemTest {
             "https://my-custom-proxy.internal/v1/chat/completions",
             com.example.ai.ChatUrlNormalizer.normalize("https://my-custom-proxy.internal/v1/v1/")
         )
+    }
+
+    // =========================================================================
+    // 5. HARDENED ANSWER EVALUATOR & CONTEXT-AWARE SYSTEM TESTS
+    // =========================================================================
+
+    @Test
+    fun testHardenedEvaluation_ExactMatchHasHighestPriority_Daily() = runBlocking {
+        val manager = AIManager(null)
+        val result = manager.evaluateAnswer(
+            questionText = "Exercise should be performed on a ______ basis.",
+            acceptedAnswers = listOf("daily"),
+            userAnswer = "daily"
+        )
+        assertTrue(result.isSuccess)
+        val eval = result.getOrThrow()
+        assertTrue("Student 'daily' vs accepted 'daily' MUST be correct", eval.isCorrect)
+        assertEquals(1.0, eval.confidence, 0.001)
+        assertEquals("exact_match", eval.evaluationType)
+        assertEquals("daily", eval.matchedAnswer)
+        assertFalse("Exact match must not need review", eval.needsReview)
+        assertTrue(eval.effectiveExplanationBn.contains("daily"))
+    }
+
+    @Test
+    fun testHardenedEvaluation_SafeNormalization_QuotesSpacesTrailingPeriod() = runBlocking {
+        val manager = AIManager(null)
+        val variations = listOf("Daily", "DAILY", "  daily  ", "\"daily\"", "'daily'", "daily.")
+        for (v in variations) {
+            val res = manager.evaluateAnswer(
+                questionText = "Read the ______ news.",
+                acceptedAnswers = listOf("daily"),
+                userAnswer = v
+            )
+            assertTrue(res.isSuccess)
+            val eval = res.getOrThrow()
+            assertTrue("Variation '$v' must evaluate as correct", eval.isCorrect)
+            assertEquals(1.0, eval.confidence, 0.001)
+        }
+    }
+
+    @Test
+    fun testHardenedEvaluation_SafetyOverride_AiHallucinatesFalseOnExactMatch() {
+        val faultyAiResult = com.example.data.model.AiEvaluationResult(
+            isCorrect = false,
+            confidence = 0.40,
+            evaluationType = "incorrect",
+            matchedAnswer = "daily",
+            verifiedAnswer = "daily",
+            needsReview = true,
+            explanation_bn = "ভুল উত্তর"
+        )
+
+        // Step 5 validation must strictly override faulty AI
+        val hardened = com.example.ai.AIPromptBuilder.validateAndHardenEvaluation(
+            parsedResult = faultyAiResult,
+            userAnswer = "daily",
+            acceptedAnswers = listOf("daily"),
+            fallbackAnswer = "daily"
+        )
+
+        assertTrue("Safety override must turn isCorrect to true on exact match", hardened.isCorrect)
+        assertEquals(1.0, hardened.confidence, 0.001)
+        assertEquals("exact_match", hardened.evaluationType)
+        assertFalse(hardened.needsReview)
+        assertTrue(hardened.effectiveExplanationBn.contains("daily"))
+    }
+
+    @Test
+    fun testHardenedEvaluation_FullContextPromptPayload() {
+        val request = AnswerEvaluationRequest(
+            questionText = "Air is the most important (a) — of human environment.",
+            acceptedAnswers = listOf("element"),
+            userAnswer = "sustainability",
+            completeSentence = "Air is the most important (a) — of human environment.",
+            blankPosition = "(a) —",
+            surroundingText = "...most important (a) — of human...",
+            subject = "English",
+            category = "Grammar & Vocabulary",
+            sourceContext = "Class 9 English Textbook",
+            quizTitle = "HSC English 1st Paper"
+        )
+
+        val prompt = com.example.ai.AIPromptBuilder.buildEvaluationPrompt(request)
+
+        assertTrue(prompt.contains("Context-Aware Educational Answer Evaluator"))
+        assertTrue(prompt.contains("Air is the most important (a) — of human environment."))
+        assertTrue(prompt.contains("sustainability"))
+        assertTrue(prompt.contains("element"))
+        assertTrue(prompt.contains("Class 9 English Textbook"))
+        assertTrue(prompt.contains("তোমার উত্তর কেন ভুল?"))
+        assertTrue(prompt.contains("সঠিক উত্তর কী?"))
+        assertTrue(prompt.contains("সঠিক উত্তরটি বাক্যে কেন বসে?"))
+        assertTrue(prompt.contains("অর্থগত পার্থক্য"))
+    }
+
+    @Test
+    fun testHardenedEvaluation_LowConfidenceTriggersNeedsReview() {
+        val json = """
+            {
+              "isCorrect": false,
+              "confidence": 0.65,
+              "evaluationType": "incorrect",
+              "matchedAnswer": "durability",
+              "verifiedAnswer": "durability",
+              "explanation_bn": "তোমার উত্তরটি অনিশ্চিত।"
+            }
+        """.trimIndent()
+
+        val parsed = com.example.ai.AIPromptBuilder.parseEvaluationResponse(
+            rawResponse = json,
+            fallbackAcceptedAnswer = "durability",
+            userAnswer = "endurance",
+            acceptedAnswers = listOf("durability")
+        )
+
+        assertTrue("Confidence below 0.70 must flag needsReview = true", parsed.needsReview)
     }
 }

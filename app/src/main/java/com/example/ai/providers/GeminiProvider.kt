@@ -49,7 +49,12 @@ class GeminiProvider(
         val prompt = AIPromptBuilder.buildEvaluationPrompt(request)
         callJsonApi(prompt, config).map { raw ->
             val fallback = request.acceptedAnswers.firstOrNull().orEmpty()
-            AIPromptBuilder.parseEvaluationResponse(raw, fallback)
+            AIPromptBuilder.parseEvaluationResponse(
+                rawResponse = raw,
+                fallbackAcceptedAnswer = fallback,
+                userAnswer = request.userAnswer,
+                acceptedAnswers = request.acceptedAnswers
+            )
         }
     }
 
@@ -80,6 +85,20 @@ class GeminiProvider(
         val prompt = AIPromptBuilder.buildQuestionAuditPrompt(question)
         callJsonApi(prompt, config).map { raw ->
             AIPromptBuilder.parseQuestionAudit(question, raw)
+        }
+    }
+
+    override suspend fun auditQuestionsBatch(
+        questions: List<QuestionSchema>,
+        config: AIConfig
+    ): Result<List<QuestionAuditResult>> = withContext(Dispatchers.IO) {
+        if (questions.isEmpty()) return@withContext Result.success(emptyList())
+        if (questions.size == 1) {
+            return@withContext auditQuestion(questions[0], config).map { listOf(it) }
+        }
+        val prompt = AIPromptBuilder.buildBatchQuestionAuditPrompt(questions)
+        callJsonApi(prompt, config).map { raw ->
+            AIPromptBuilder.parseBatchQuestionAuditResponse(raw, questions)
         }
     }
 

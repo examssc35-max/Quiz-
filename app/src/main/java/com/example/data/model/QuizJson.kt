@@ -20,19 +20,13 @@ enum class QuestionType {
 
 object AnswerComparison {
     fun normalize(text: String): String {
-        return text.trim()
-            .replace(Regex("\\s+"), " ")
-            .lowercase()
+        return com.example.ai.SmartNormalizer.normalizeSafe(text)
     }
 
     fun isAnswerCorrect(userAnswer: String, acceptedAnswers: List<String>): Boolean {
         val trimmed = userAnswer.trim()
         if (trimmed.isEmpty()) return false
-        val normalizedUser = normalize(trimmed)
-        if (acceptedAnswers.any { normalize(it) == normalizedUser }) {
-            return true
-        }
-        return com.example.ai.SmartNormalizer.isEquivalentlyNormalized(trimmed, acceptedAnswers)
+        return com.example.ai.SmartNormalizer.checkExactOrNormalizedMatch(trimmed, acceptedAnswers).first
     }
 }
 

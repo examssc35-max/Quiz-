@@ -1,22 +1,69 @@
 package com.example.ai
 
 import com.example.data.model.AiEvaluationResult
+import java.text.Normalizer
 import java.util.Locale
 
 /**
  * Smart local normalizer for educational quiz answers.
- * Normalizes harmless formatting differences before calling AI or during offline fallback:
+ * Implements Step 1 (Local exact/normalized comparison) and Step 2 (Local semantic-safe rules)
+ * of the answer evaluation pipeline.
+ *
+ * Normalizes harmless formatting differences:
+ * - leading/trailing spaces
+ * - repeated harmless spaces
+ * - harmless English capitalization ("Daily", "daily", "DAILY")
+ * - Unicode normalization (NFC)
+ * - equivalent basic punctuation (wrapping quotes, harmless trailing periods)
  * - English digits ↔ Bengali digits ↔ Arabic-Indic digits
  * - Comma separators in numbers (1,000 ↔ 1000, ১,০০০ ↔ ১০০০)
- * - Decimal variations
- * - Dash variations (hyphen, en-dash, em-dash, minus, "to", "থেকে")
- * - Spaces around symbols and punctuation
+ * - Decimal variations & range dashes
  * - Common units (kg ↔ কেজি, km ↔ কিমি, % ↔ শতাংশ, etc.)
- * - Case insensitivity & whitespace trimming
  *
- * Does NOT alter semantic word meaning or apply aggressive spelling changes.
+ * Preserves Bengali script and does NOT alter semantic word meaning or apply unsafe stemming.
  */
 object SmartNormalizer {
+
+    /**
+     * Safe answer normalizer implementing Step 1 exact/normalized comparison rules.
+     * Applies NFC Unicode normalization, space trimming and collapsing, harmless English lowercasing,
+     * quote cleaning, and harmless trailing punctuation stripping without altering meaning.
+     */
+    fun normalizeSafe(text: String): String {
+        if (text.isBlank()) return ""
+
+        // 1. Unicode NFC Normalization
+        var str = Normalizer.normalize(text.trim(), Normalizer.Form.NFC)
+
+        // 2. Collapse internal multiple spaces
+        str = str.replace(Regex("\\s+"), " ")
+
+        // 3. Normalize quotes and apostrophes
+        str = str.replace(Regex("[‘’`']"), "'")
+            .replace(Regex("[\"“”]"), "\"")
+
+        // 4. Strip harmless wrapping quotes or parentheses
+        if ((str.startsWith("\"") && str.endsWith("\"") && str.length >= 2) ||
+            (str.startsWith("'") && str.endsWith("'") && str.length >= 2) ||
+            (str.startsWith("(") && str.endsWith(")") && str.length >= 2)
+        ) {
+            str = str.substring(1, str.length - 1).trim()
+        }
+
+        // 5. Strip harmless trailing punctuation like '.' or ',' if user typed it at the end of a single word/phrase
+        // (unless it's an abbreviation like "e.g." or a decimal number)
+        if (str.endsWith(".") && !str.contains("..") && !Regex("\\d\\.\\d?$").containsMatchIn(str) && str.count { it == '.' } == 1) {
+            str = str.removeSuffix(".").trim()
+        }
+        if (str.endsWith(",") || str.endsWith("!")) {
+            str = str.dropLast(1).trim()
+        }
+
+        // 6. Harmless English lowercasing (no-op for Bengali)
+        str = str.lowercase(Locale.ROOT)
+
+        return str.trim()
+    }
 
     /**
      * Translates Bengali digits ('০'..'৯') and Arabic-Indic digits ('٠'..'٩') to ASCII ('0'..'9').
@@ -111,61 +158,120 @@ object SmartNormalizer {
     }
 
     /**
+     * Step 1 & Step 2 deterministic check:
+     * Compares student's answer against all accepted answers.
+     * Evaluates:
+     * 1. Exact case-sensitive match
+     * 2. Case-insensitive harmless English match (e.g. "Daily" vs "daily")
+     * 3. Safe normalized match (normalizeSafe: quotes, spaces, trailing period)
+     * 4. Smart number/digit/unit normalized match (normalize: 1000 kg vs ১,০০০ কেজি, 60-70% vs ৬০–৭০%)
+     *
+     * Returns Pair(isMatch: Boolean, matchedAnswer: String?)
+     * Highest priority in evaluation pipeline: AI is NEVER called when this returns true!
+     */
+    fun checkExactOrNormalizedMatch(
+        userAnswer: String,
+        acceptedAnswers: List<String>
+    ): Pair<Boolean, String?> {
+        val trimmedUser = userAnswer.trim()
+        if (trimmedUser.isEmpty() || acceptedAnswers.isEmpty()) {
+            return Pair(false, null)
+        }
+
+        // 1. Exact match (highest priority)
+        val exactMatch = acceptedAnswers.firstOrNull { it.trim().equals(trimmedUser, ignoreCase = false) }
+        if (exactMatch != null) {
+            return Pair(true, exactMatch)
+        }
+
+        // 2. English case-insensitive trimmed match (e.g. "Daily" == "daily", "DAILY" == "daily")
+        val caseInsensitiveMatch = acceptedAnswers.firstOrNull { it.trim().equals(trimmedUser, ignoreCase = true) }
+        if (caseInsensitiveMatch != null) {
+            return Pair(true, caseInsensitiveMatch)
+        }
+
+        // 3. Safe normalized match (quotes stripped, NFC normalized, harmless trailing period stripped)
+        val safeUser = normalizeSafe(trimmedUser)
+        if (safeUser.isNotEmpty()) {
+            val safeMatch = acceptedAnswers.firstOrNull { normalizeSafe(it) == safeUser }
+            if (safeMatch != null) {
+                return Pair(true, safeMatch)
+            }
+        }
+
+        // 4. Number, digit, dash, and unit equivalence (Step 2 semantic-safe rules)
+        val fullNormUser = normalize(trimmedUser)
+        if (fullNormUser.isNotEmpty()) {
+            val fullNormMatch = acceptedAnswers.firstOrNull { normalize(it) == fullNormUser }
+            if (fullNormMatch != null) {
+                return Pair(true, fullNormMatch)
+            }
+        }
+
+        return Pair(false, null)
+    }
+
+    /**
      * Checks if the user's answer is equivalent to any accepted answer after smart normalization.
      */
     fun isEquivalentlyNormalized(userAnswer: String, acceptedAnswers: List<String>): Boolean {
-        val normalizedUser = normalize(userAnswer)
-        if (normalizedUser.isEmpty()) return false
-
-        return acceptedAnswers.any { accepted ->
-            val normalizedAccepted = normalize(accepted)
-            normalizedUser == normalizedAccepted
-        }
+        return checkExactOrNormalizedMatch(userAnswer, acceptedAnswers).first
     }
 
     /**
      * Finds the first accepted answer that matches the normalized user answer, or null.
      */
     fun findMatchedAnswer(userAnswer: String, acceptedAnswers: List<String>): String? {
-        val normalizedUser = normalize(userAnswer)
-        if (normalizedUser.isEmpty()) return null
-
-        return acceptedAnswers.firstOrNull { accepted ->
-            normalize(accepted) == normalizedUser
-        }
+        return checkExactOrNormalizedMatch(userAnswer, acceptedAnswers).second
     }
 
     /**
      * Creates a high quality fallback AI evaluation result using smart local normalization.
+     * Guaranteed never to crash, handles offline mode, and provides student-friendly Bangla explanation.
      */
     fun createLocalEvaluation(
         questionText: String,
         acceptedAnswers: List<String>,
         userAnswer: String,
-        offlineNote: Boolean = false
+        offlineNote: Boolean = false,
+        evaluationType: String? = null
     ): AiEvaluationResult {
         val trimmed = userAnswer.trim()
-        val isCorrect = isEquivalentlyNormalized(trimmed, acceptedAnswers)
-        val matched = findMatchedAnswer(trimmed, acceptedAnswers) ?: acceptedAnswers.firstOrNull().orEmpty()
+        val allAccepted = acceptedAnswers.filter { it.isNotBlank() }
+        val (isMatch, matched) = checkExactOrNormalizedMatch(trimmed, allAccepted)
+        val chosenMatched = matched ?: allAccepted.firstOrNull().orEmpty()
 
-        val banglaExpl = if (isCorrect) {
-            val noteSuffix = if (offlineNote) " (অফলাইন মোডে যাচাইকৃত)" else ""
-            "তোমার উত্তরটি সঠিক। ‘$matched’ (বা সমমানের ‘$trimmed’) বাক্যের অর্থ ও grammar অনুযায়ী উপযুক্তভাবে বসেছে$noteSuffix।"
+        val isExact = trimmed.equals(chosenMatched, ignoreCase = false)
+        val evalType = evaluationType ?: if (isMatch) {
+            if (isExact) "exact_match" else "normalized_match"
         } else {
-            val acceptedListStr = if (acceptedAnswers.size > 1) {
-                acceptedAnswers.joinToString(", ")
+            if (offlineNote) "ai_unavailable" else "incorrect"
+        }
+
+        val noteSuffix = if (offlineNote) " (অফলাইন মোডে যাচাইকৃত)" else ""
+
+        val banglaExpl = if (isMatch) {
+            "তোমার উত্তরটি সঠিক। বাক্যের এই স্থানে “$chosenMatched” শব্দটিই সঠিকভাবে বসে এবং বাক্যের অর্থ ঠিক থাকে$noteSuffix।"
+        } else {
+            val acceptedListStr = if (allAccepted.size > 1) {
+                allAccepted.joinToString(", ")
             } else {
-                matched.ifEmpty { "উপযুক্ত শব্দ" }
+                chosenMatched.ifEmpty { "উপযুক্ত শব্দ" }
             }
-            "তোমার উত্তর ‘$trimmed’ এই বাক্যে উপযুক্ত নয়। বাক্যের অর্থ ও grammar অনুযায়ী এখানে সঠিক উত্তর: $acceptedListStr।"
+            "তোমার উত্তর “$trimmed” এই বাক্যে উপযুক্ত নয়। বাক্যের অর্থ ও প্রসঙ্গ অনুযায়ী এখানে সঠিক উত্তর: “$acceptedListStr”$noteSuffix।"
         }
 
         return AiEvaluationResult(
-            isCorrect = isCorrect,
-            confidence = if (isCorrect) 0.98 else 0.85,
-            reason = if (isCorrect) "Smart normalized match against accepted answer" else "Answer does not match expected answers",
+            isCorrect = isMatch,
+            confidence = if (isMatch) 1.0 else 0.80,
+            evaluationType = evalType,
+            matchedAnswer = chosenMatched,
+            verifiedAnswer = chosenMatched,
+            needsReview = !isMatch && offlineNote,
+            explanation_bn = banglaExpl,
+            reason = if (isMatch) "Deterministic local exact/normalized match" else "Local match not found (AI unavailable or offline)",
             banglaExplanation = banglaExpl,
-            matchedAnswer = matched
+            decision = if (isMatch) "correct" else if (offlineNote) "uncertain" else "wrong"
         )
     }
 }
