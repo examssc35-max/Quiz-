@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Calculate
@@ -74,6 +76,7 @@ fun HomeScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         // Header
@@ -359,7 +362,7 @@ fun HomeScreen(
                     CategoryItem("General Knowledge", Icons.Default.Public, Color(0xFF3B82F6)),
                     CategoryItem("Science", Icons.Default.Science, Color(0xFF10B981)),
                     CategoryItem("Mathematics", Icons.Default.Calculate, Color(0xFF8B5CF6)),
-                    CategoryItem("English", Icons.Default.MenuBook, Color(0xFFA855F7)),
+                    CategoryItem("English", Icons.AutoMirrored.Filled.MenuBook, Color(0xFFA855F7)),
                     CategoryItem("ICT", Icons.Default.Computer, Color(0xFF06B6D4)),
                     CategoryItem("বাংলাদেশ", Icons.Default.Widgets, Color(0xFF14B8A6))
                 )

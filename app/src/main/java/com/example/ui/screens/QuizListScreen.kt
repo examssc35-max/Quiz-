@@ -4,15 +4,19 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,8 +44,10 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -112,6 +118,7 @@ fun QuizListScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 20.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Top Bar
@@ -262,7 +269,7 @@ fun QuizListScreen(
             }
 
             item {
-                Spacer(modifier = Modifier.height(100.dp))
+                Spacer(modifier = Modifier.navigationBarsPadding().height(100.dp))
             }
         }
 
@@ -274,8 +281,9 @@ fun QuizListScreen(
             contentColor = Color.White,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 24.dp, bottom = 96.dp)
-                .size(58.dp)
+                .navigationBarsPadding()
+                .padding(end = 20.dp, bottom = 96.dp)
+                .size(56.dp)
         ) {
             Icon(
                 imageVector = Icons.Default.Add,
@@ -351,10 +359,14 @@ fun QuizListItemCard(
                 )
             }
 
-            Spacer(modifier = Modifier.width(14.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
             // Quiz Info
-            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+            ) {
                 Text(
                     text = quiz.title,
                     color = TextPrimary,
@@ -363,95 +375,193 @@ fun QuizListItemCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(3.dp))
                 Text(
                     text = "${quiz.questionCount} Questions • ${quiz.difficulty}",
-                    color = TextMuted,
-                    fontSize = 13.sp
+                    color = Color(0xCCCBD5E1),
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            // Play Button
+            // Play Button (44dp touch target with clean visibility)
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(44.dp)
                     .clip(CircleShape)
-                    .background(Color(0x35FFFFFF))
+                    .background(AccentBluePrimary.copy(alpha = 0.55f))
+                    .border(1.dp, Color(0x60FFFFFF), CircleShape)
                     .clickable(onClick = onPlayClick),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Play",
+                    contentDescription = "Play Quiz",
                     tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(24.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
-            // Favorite Button
+            // Favorite Button (44dp touch target)
             IconButton(
                 onClick = onFavoriteClick,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(44.dp)
             ) {
                 Icon(
                     imageVector = if (quiz.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = "Favorite",
-                    tint = if (quiz.isFavorite) Color(0xFFF43F5E) else Color(0x99FFFFFF),
-                    modifier = Modifier.size(20.dp)
+                    contentDescription = if (quiz.isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (quiz.isFavorite) Color(0xFFF43F5E) else Color(0xCCFFFFFF),
+                    modifier = Modifier.size(22.dp)
                 )
             }
 
-            // More Options Menu
+            // More Options Menu (44dp touch target with high contrast glass popup)
             Box {
                 IconButton(
                     onClick = { showMenu = true },
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options",
-                        tint = Color(0x99FFFFFF),
-                        modifier = Modifier.size(20.dp)
+                        contentDescription = "Quiz options",
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
 
                 DropdownMenu(
                     expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
+                    onDismissRequest = { showMenu = false },
+                    modifier = Modifier
+                        .background(Color(0xFF0F172A))
+                        .border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(18.dp)),
+                    shape = RoundedCornerShape(18.dp),
+                    containerColor = Color(0xFF0F172A),
+                    shadowElevation = 16.dp
                 ) {
                     DropdownMenuItem(
-                        text = { Text("Edit Quiz") },
-                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                        text = {
+                            Text(
+                                text = "Edit Quiz",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = Color.White,
+                            leadingIconColor = AccentCyan
+                        ),
                         onClick = {
                             showMenu = false
                             onEditClick()
-                        }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                     )
                     DropdownMenuItem(
-                        text = { Text("Duplicate") },
-                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                        text = {
+                            Text(
+                                text = "Duplicate",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                tint = AccentBlueLight,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = Color.White,
+                            leadingIconColor = AccentBlueLight
+                        ),
                         onClick = {
                             showMenu = false
                             onDuplicateClick()
-                        }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                     )
                     DropdownMenuItem(
-                        text = { Text("Export JSON") },
-                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                        text = {
+                            Text(
+                                text = "Export JSON",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = null,
+                                tint = Color(0xFF34D399),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = Color.White,
+                            leadingIconColor = Color(0xFF34D399)
+                        ),
                         onClick = {
                             showMenu = false
                             onExportClick()
-                        }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                    )
+                    HorizontalDivider(
+                        color = Color(0x30FFFFFF),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                     )
                     DropdownMenuItem(
-                        text = { Text("Delete", color = WrongRed) },
-                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = WrongRed) },
+                        text = {
+                            Text(
+                                text = "Delete",
+                                color = WrongRed,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = null,
+                                tint = WrongRed,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = WrongRed,
+                            leadingIconColor = WrongRed
+                        ),
                         onClick = {
                             showMenu = false
                             onDeleteClick()
-                        }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                     )
                 }
             }

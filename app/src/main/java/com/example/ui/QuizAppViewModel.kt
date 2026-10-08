@@ -211,6 +211,8 @@ class QuizAppViewModel(
 
     suspend fun saveQuiz(schema: QuizSchema, existingId: String? = null): String {
         val id = repository.insertOrUpdateQuiz(schema, existingId)
+        val msg = if (existingId != null) "Quiz '${schema.title}' updated successfully" else "Quiz '${schema.title}' created successfully"
+        _operationState.value = QuizOperationState(successMessage = msg)
         return id
     }
 

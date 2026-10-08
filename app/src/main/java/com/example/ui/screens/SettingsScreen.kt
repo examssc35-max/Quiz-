@@ -201,7 +201,7 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(90.dp))
+        Spacer(modifier = Modifier.height(120.dp))
     }
 
     if (showResetStatsDialog) {

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,13 +24,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,7 +37,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,21 +54,22 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.local.entity.QuizEntity
 import com.example.data.model.QuestionSchema
 import com.example.data.model.QuestionType
 import com.example.data.model.QuizJsonParser
 import com.example.data.model.QuizSchema
+import com.example.data.repository.QuizRepository
 import com.example.ui.components.GlassCard
+import com.example.ui.components.GlassConfirmDialog
 import com.example.ui.components.GlassFilterChip
 import com.example.ui.components.GlassPrimaryButton
+import com.example.ui.components.GlassSecondaryButton
 import com.example.ui.components.GlassTopBar
 import com.example.ui.theme.AccentBlueLight
 import com.example.ui.theme.AccentBluePrimary
 import com.example.ui.theme.AccentCyan
 import com.example.ui.theme.CorrectGreen
 import com.example.ui.theme.GlassBorderBrush
-import com.example.ui.theme.GlassCardSurface
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -75,65 +77,234 @@ import com.example.ui.theme.WrongRed
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-@OptIn(ExperimentalMaterial3Api::class)
+sealed class EditorUiState {
+    object Loading : EditorUiState()
+    data class Loaded(
+        val existingQuizId: String?,
+        val initialSchema: QuizSchema,
+        val initialRawJson: String
+    ) : EditorUiState()
+    data class Error(val message: String) : EditorUiState()
+}
+
 @Composable
 fun QuizEditorScreen(
-    existingQuiz: QuizEntity?,
+    existingQuizId: String?,
+    repository: QuizRepository,
     onBackClick: () -> Unit,
-    onSaveQuiz: suspend (schema: QuizSchema) -> Unit,
+    onSaveQuiz: suspend (schema: QuizSchema, quizId: String?) -> Unit,
     aiManager: com.example.ai.AIManager = com.example.ai.AIManager.defaultManager,
     modifier: Modifier = Modifier
+) {
+    var uiState by remember { mutableStateOf<EditorUiState>(EditorUiState.Loading) }
+
+    LaunchedEffect(existingQuizId) {
+        if (existingQuizId == null) {
+            val template = QuizSchema(
+                title = "New Quiz",
+                description = "",
+                category = "General Knowledge",
+                difficulty = "Medium",
+                timeLimit = 120,
+                shuffleQuestions = false,
+                shuffleOptions = false,
+                questions = listOf(
+                    QuestionSchema(
+                        id = UUID.randomUUID().toString().take(8),
+                        type = QuestionType.MCQ,
+                        question = "What is the capital of Bangladesh?",
+                        options = listOf("Chittagong", "Dhaka", "Sylhet", "Rajshahi"),
+                        answer = 1,
+                        points = 1,
+                        explanation = "Dhaka has been the capital of Bangladesh since independence in 1971."
+                    )
+                )
+            )
+            uiState = EditorUiState.Loaded(
+                existingQuizId = null,
+                initialSchema = template,
+                initialRawJson = QuizJsonParser.toJsonString(template)
+            )
+        } else {
+            uiState = EditorUiState.Loading
+            try {
+                val quizEntity = repository.getQuizById(existingQuizId)
+                if (quizEntity == null) {
+                    uiState = EditorUiState.Error("Quiz not found")
+                } else {
+                    val parseResult = QuizJsonParser.parseLenient(quizEntity.jsonContent)
+                    val schema = parseResult.getOrElse {
+                        QuizSchema(
+                            title = quizEntity.title,
+                            description = quizEntity.description,
+                            category = quizEntity.category,
+                            difficulty = quizEntity.difficulty,
+                            timeLimit = quizEntity.timeLimit,
+                            shuffleQuestions = quizEntity.shuffleQuestions,
+                            shuffleOptions = quizEntity.shuffleOptions,
+                            questions = emptyList()
+                        )
+                    }
+                    uiState = EditorUiState.Loaded(
+                        existingQuizId = existingQuizId,
+                        initialSchema = schema,
+                        initialRawJson = quizEntity.jsonContent
+                    )
+                }
+            } catch (e: Exception) {
+                uiState = EditorUiState.Error("Failed to load quiz: ${e.message ?: "Unknown error"}")
+            }
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        when (val state = uiState) {
+            is EditorUiState.Loading -> {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    GlassTopBar(
+                        title = if (existingQuizId == null) "Create Quiz" else "Edit Quiz",
+                        onBackClick = onBackClick
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = AccentCyan, strokeWidth = 3.dp)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Loading quiz data...",
+                                color = TextSecondary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+            is EditorUiState.Error -> {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    GlassTopBar(
+                        title = "Edit Quiz",
+                        onBackClick = onBackClick
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        GlassCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(20.dp),
+                            backgroundColor = Color(0x351E293B),
+                            borderBrush = GlassBorderBrush
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = WrongRed,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = state.message,
+                                    color = TextPrimary,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "The requested quiz could not be opened for editing.",
+                                    color = TextMuted,
+                                    fontSize = 14.sp
+                                )
+                                Spacer(modifier = Modifier.height(20.dp))
+                                GlassPrimaryButton(
+                                    text = "Back to Quizzes",
+                                    onClick = onBackClick
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            is EditorUiState.Loaded -> {
+                LoadedEditorContent(
+                    loadedState = state,
+                    onBackClick = onBackClick,
+                    onSaveQuiz = onSaveQuiz,
+                    aiManager = aiManager
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadedEditorContent(
+    loadedState: EditorUiState.Loaded,
+    onBackClick: () -> Unit,
+    onSaveQuiz: suspend (schema: QuizSchema, quizId: String?) -> Unit,
+    aiManager: com.example.ai.AIManager
 ) {
     val scope = rememberCoroutineScope()
 
     var activeTab by remember { mutableStateOf("Visual") } // "Visual" or "Raw JSON"
 
-    // Form states
-    var title by remember { mutableStateOf(existingQuiz?.title ?: "") }
-    var description by remember { mutableStateOf(existingQuiz?.description ?: "") }
-    var category by remember { mutableStateOf(existingQuiz?.category ?: "General Knowledge") }
-    var difficulty by remember { mutableStateOf(existingQuiz?.difficulty ?: "Medium") }
-    var timeLimit by remember { mutableIntStateOf(existingQuiz?.timeLimit ?: 120) }
-    var shuffleQuestions by remember { mutableStateOf(existingQuiz?.shuffleQuestions ?: false) }
-    var shuffleOptions by remember { mutableStateOf(existingQuiz?.shuffleOptions ?: false) }
+    // Form states initialized safely from loaded schema
+    var title by remember { mutableStateOf(loadedState.initialSchema.title) }
+    var description by remember { mutableStateOf(loadedState.initialSchema.description) }
+    var category by remember { mutableStateOf(loadedState.initialSchema.category) }
+    var difficulty by remember { mutableStateOf(loadedState.initialSchema.difficulty) }
+    var timeLimit by remember { mutableIntStateOf(loadedState.initialSchema.timeLimit) }
+    var shuffleQuestions by remember { mutableStateOf(loadedState.initialSchema.shuffleQuestions) }
+    var shuffleOptions by remember { mutableStateOf(loadedState.initialSchema.shuffleOptions) }
 
-    // Initial questions parsing
-    val initialQuestions = remember {
-        existingQuiz?.let {
-            QuizJsonParser.validateAndParse(it.jsonContent).getOrNull()?.questions
-        } ?: listOf(
-            QuestionSchema(
-                id = UUID.randomUUID().toString().take(8),
-                type = QuestionType.MCQ,
-                question = "What is the capital of Bangladesh?",
-                options = listOf("Chittagong", "Dhaka", "Sylhet", "Rajshahi"),
-                answer = 1,
-                points = 1,
-                explanation = "Dhaka has been the capital of Bangladesh since independence in 1971."
-            )
-        )
+    val questions = remember {
+        mutableStateListOf<QuestionSchema>().apply {
+            addAll(loadedState.initialSchema.questions)
+        }
     }
 
-    val questions = remember { mutableStateListOf<QuestionSchema>().apply { addAll(initialQuestions) } }
-
-    var rawJsonText by remember {
-        mutableStateOf(
-            existingQuiz?.jsonContent ?: QuizJsonParser.toJsonString(
-                QuizSchema(
-                    title = "New Quiz",
-                    description = "Custom quiz description",
-                    category = "General Knowledge",
-                    difficulty = "Medium",
-                    timeLimit = 120,
-                    shuffleQuestions = false,
-                    shuffleOptions = false,
-                    questions = initialQuestions
-                )
-            )
-        )
-    }
-
+    var rawJsonText by remember { mutableStateOf(loadedState.initialRawJson) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var validationErrors by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isModified by remember { mutableStateOf(false) }
+    var showDiscardDialog by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
+
+    // Intercept Back navigation if changes are pending
+    BackHandler {
+        if (isModified) {
+            showDiscardDialog = true
+        } else {
+            onBackClick()
+        }
+    }
+
+    if (showDiscardDialog) {
+        GlassConfirmDialog(
+            title = "Discard Changes?",
+            message = "You have unsaved changes in this quiz. Are you sure you want to discard them?",
+            confirmText = "Discard",
+            dismissText = "Keep Editing",
+            isDestructive = true,
+            onConfirm = {
+                showDiscardDialog = false
+                onBackClick()
+            },
+            onDismiss = { showDiscardDialog = false }
+        )
+    }
 
     fun syncFromVisualToRaw() {
         val schema = QuizSchema(
@@ -150,7 +321,7 @@ fun QuizEditorScreen(
     }
 
     fun syncFromRawToVisual(): Boolean {
-        val res = QuizJsonParser.validateAndParse(rawJsonText)
+        val res = QuizJsonParser.parseLenient(rawJsonText)
         if (res.isSuccess) {
             val s = res.getOrThrow()
             title = s.title
@@ -163,17 +334,138 @@ fun QuizEditorScreen(
             questions.clear()
             questions.addAll(s.questions)
             errorMessage = null
+            validationErrors = emptyList()
+            isModified = true
             return true
         } else {
-            errorMessage = res.exceptionOrNull()?.message ?: "Invalid JSON syntax"
+            errorMessage = "Invalid JSON syntax: ${res.exceptionOrNull()?.message}"
             return false
         }
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    fun validateBeforeSave(): List<String> {
+        val errors = mutableListOf<String>()
+        if (title.isBlank()) {
+            errors.add("Quiz title cannot be empty.")
+        }
+        if (timeLimit < 0) {
+            errors.add("Time limit cannot be negative.")
+        }
+        if (questions.isEmpty()) {
+            errors.add("Quiz must contain at least one question.")
+        }
+        questions.forEachIndexed { idx, q ->
+            val num = idx + 1
+            if (q.question.isBlank()) {
+                errors.add("Question #$num: Question text cannot be empty.")
+            }
+            if (q.points < 1) {
+                errors.add("Question #$num: Points must be at least 1.")
+            }
+            if (q.type == QuestionType.MCQ) {
+                if (q.options.size < 2) {
+                    errors.add("Question #$num: Multiple choice question must have at least 2 options.")
+                } else if (q.options.any { it.isBlank() }) {
+                    errors.add("Question #$num: All options must contain text.")
+                }
+                if (q.options.isNotEmpty() && q.answer !in q.options.indices) {
+                    errors.add("Question #$num: Selected answer index (${q.answer}) is out of range (0..${q.options.lastIndex}). Please tap an option to select the correct answer.")
+                }
+            } else if (q.type == QuestionType.FILL_BLANK) {
+                if (q.fillBlankAnswer.isBlank() && q.acceptedAnswers.isEmpty()) {
+                    errors.add("Question #$num: Fill-in-the-blank question requires at least one accepted answer.")
+                }
+            }
+        }
+        return errors
+    }
+
+    fun handleSave() {
+        if (isSaving) return
+
+        if (activeTab == "Raw JSON") {
+            val parseRes = QuizJsonParser.validateAndParse(rawJsonText)
+            if (parseRes.isFailure) {
+                errorMessage = "Cannot save: Invalid JSON syntax (${parseRes.exceptionOrNull()?.message})"
+                return
+            }
+            val schema = parseRes.getOrThrow()
+            val errors = QuizJsonParser.validateSchemaForSaving(schema)
+            if (errors.isNotEmpty()) {
+                validationErrors = errors
+                errorMessage = "Please fix the ${errors.size} error(s) below before saving."
+                return
+            }
+            isSaving = true
+            scope.launch {
+                try {
+                    onSaveQuiz(schema, loadedState.existingQuizId)
+                } catch (e: Exception) {
+                    errorMessage = "Error saving quiz: ${e.message}"
+                } finally {
+                    isSaving = false
+                }
+            }
+        } else {
+            val errors = validateBeforeSave()
+            if (errors.isNotEmpty()) {
+                validationErrors = errors
+                errorMessage = "Please fix the ${errors.size} error(s) below before saving."
+                return
+            }
+            val cleanQuestions = questions.map { q ->
+                if (q.type == QuestionType.MCQ) {
+                    q.copy(
+                        options = q.options.map { it.trim() },
+                        fillBlankAnswer = "",
+                        acceptedAnswers = emptyList()
+                    )
+                } else {
+                    val primary = q.fillBlankAnswer.trim()
+                    val allAccepted = (listOf(primary) + q.acceptedAnswers.map { it.trim() })
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                    q.copy(
+                        options = emptyList(),
+                        answer = 0,
+                        fillBlankAnswer = primary.ifEmpty { allAccepted.firstOrNull() ?: "" },
+                        acceptedAnswers = allAccepted
+                    )
+                }
+            }
+            val schema = QuizSchema(
+                title = title.trim(),
+                description = description.trim(),
+                category = category.trim().ifEmpty { "General Knowledge" },
+                difficulty = difficulty.trim().ifEmpty { "Medium" },
+                timeLimit = timeLimit.coerceAtLeast(0),
+                shuffleQuestions = shuffleQuestions,
+                shuffleOptions = shuffleOptions,
+                questions = cleanQuestions
+            )
+            isSaving = true
+            scope.launch {
+                try {
+                    onSaveQuiz(schema, loadedState.existingQuizId)
+                } catch (e: Exception) {
+                    errorMessage = "Error saving quiz: ${e.message}"
+                } finally {
+                    isSaving = false
+                }
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
         GlassTopBar(
-            title = if (existingQuiz == null) "Create Quiz" else "Edit Quiz",
-            onBackClick = onBackClick
+            title = if (loadedState.existingQuizId == null) "Create Quiz" else "Edit Quiz",
+            onBackClick = {
+                if (isModified) {
+                    showDiscardDialog = true
+                } else {
+                    onBackClick()
+                }
+            }
         )
 
         // Tab Selector: Visual vs Raw JSON
@@ -220,7 +512,25 @@ fun QuizEditorScreen(
                     .border(1.dp, WrongRed, RoundedCornerShape(12.dp))
                     .padding(12.dp)
             ) {
-                Text(text = errorMessage ?: "", color = WrongRed, fontSize = 13.sp)
+                Column {
+                    Text(
+                        text = errorMessage ?: "",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (validationErrors.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        validationErrors.forEach { err ->
+                            Text(
+                                text = "• $err",
+                                color = Color(0xFFFFCCCC),
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -236,6 +546,8 @@ fun QuizEditorScreen(
                     onValueChange = {
                         rawJsonText = it
                         errorMessage = null
+                        validationErrors = emptyList()
+                        isModified = true
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -268,6 +580,7 @@ fun QuizEditorScreen(
                             val parseResult = QuizJsonParser.validateAndParse(rawJsonText)
                             if (parseResult.isSuccess) {
                                 errorMessage = null
+                                validationErrors = emptyList()
                                 syncFromRawToVisual()
                             } else {
                                 errorMessage = parseResult.exceptionOrNull()?.message ?: "Invalid JSON"
@@ -277,16 +590,9 @@ fun QuizEditorScreen(
                     )
 
                     GlassPrimaryButton(
-                        text = "Save Quiz",
-                        onClick = {
-                            val parseResult = QuizJsonParser.validateAndParse(rawJsonText)
-                            if (parseResult.isSuccess) {
-                                val schema = parseResult.getOrThrow()
-                                scope.launch { onSaveQuiz(schema) }
-                            } else {
-                                errorMessage = parseResult.exceptionOrNull()?.message ?: "Cannot save: Invalid JSON"
-                            }
-                        },
+                        text = if (isSaving) "Saving..." else "Save Quiz",
+                        onClick = { handleSave() },
+                        enabled = !isSaving,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -322,9 +628,24 @@ fun QuizEditorScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        EditorTextField(label = "Title", value = title, onValueChange = { title = it })
+                        EditorTextField(
+                            label = "Title",
+                            value = title,
+                            onValueChange = {
+                                title = it
+                                isModified = true
+                                errorMessage = null
+                            }
+                        )
                         Spacer(modifier = Modifier.height(10.dp))
-                        EditorTextField(label = "Description", value = description, onValueChange = { description = it })
+                        EditorTextField(
+                            label = "Description",
+                            value = description,
+                            onValueChange = {
+                                description = it
+                                isModified = true
+                            }
+                        )
                         Spacer(modifier = Modifier.height(10.dp))
 
                         Row(
@@ -332,10 +653,24 @@ fun QuizEditorScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Box(modifier = Modifier.weight(1f)) {
-                                EditorTextField(label = "Category", value = category, onValueChange = { category = it })
+                                EditorTextField(
+                                    label = "Category",
+                                    value = category,
+                                    onValueChange = {
+                                        category = it
+                                        isModified = true
+                                    }
+                                )
                             }
                             Box(modifier = Modifier.weight(1f)) {
-                                EditorTextField(label = "Difficulty", value = difficulty, onValueChange = { difficulty = it })
+                                EditorTextField(
+                                    label = "Difficulty",
+                                    value = difficulty,
+                                    onValueChange = {
+                                        difficulty = it
+                                        isModified = true
+                                    }
+                                )
                             }
                         }
 
@@ -344,7 +679,10 @@ fun QuizEditorScreen(
                         EditorTextField(
                             label = "Time Limit (seconds, 0 = untimed)",
                             value = "$timeLimit",
-                            onValueChange = { timeLimit = it.toIntOrNull() ?: 0 }
+                            onValueChange = {
+                                timeLimit = it.toIntOrNull() ?: 0
+                                isModified = true
+                            }
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -358,8 +696,14 @@ fun QuizEditorScreen(
                             Text(text = "Shuffle Questions", color = TextSecondary, fontSize = 14.sp)
                             Switch(
                                 checked = shuffleQuestions,
-                                onCheckedChange = { shuffleQuestions = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentBluePrimary)
+                                onCheckedChange = {
+                                    shuffleQuestions = it
+                                    isModified = true
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AccentBluePrimary
+                                )
                             )
                         }
 
@@ -371,8 +715,14 @@ fun QuizEditorScreen(
                             Text(text = "Shuffle Options", color = TextSecondary, fontSize = 14.sp)
                             Switch(
                                 checked = shuffleOptions,
-                                onCheckedChange = { shuffleOptions = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentBluePrimary)
+                                onCheckedChange = {
+                                    shuffleOptions = it
+                                    isModified = true
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AccentBluePrimary
+                                )
                             )
                         }
                     }
@@ -409,6 +759,8 @@ fun QuizEditorScreen(
                                         explanation = ""
                                     )
                                 )
+                                isModified = true
+                                errorMessage = null
                             }
                         )
 
@@ -420,15 +772,17 @@ fun QuizEditorScreen(
                                     QuestionSchema(
                                         id = UUID.randomUUID().toString().take(8),
                                         type = QuestionType.FILL_BLANK,
-                                        question = "The capital of Bangladesh is _____.",
+                                        question = "New Fill-in-the-blank Question ${questions.size + 1}",
                                         options = emptyList(),
                                         answer = 0,
-                                        fillBlankAnswer = "Dhaka",
-                                        acceptedAnswers = listOf("Dhaka"),
+                                        fillBlankAnswer = "Answer",
+                                        acceptedAnswers = listOf("Answer"),
                                         points = 1,
                                         explanation = ""
                                     )
                                 )
+                                isModified = true
+                                errorMessage = null
                             }
                         )
                     }
@@ -437,57 +791,72 @@ fun QuizEditorScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Question Cards
-                questions.forEachIndexed { qIndex, question ->
-                    QuestionEditorCard(
-                        index = qIndex,
-                        question = question,
-                        aiManager = aiManager,
-                        onUpdate = { updated -> questions[qIndex] = updated },
-                        onDelete = { questions.removeAt(qIndex) }
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
+                if (questions.isEmpty()) {
+                    GlassCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        backgroundColor = Color(0x201E293B),
+                        borderBrush = GlassBorderBrush
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "No questions yet",
+                                color = TextSecondary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Tap '+ MCQ' or '+ Fill Blank' above to add your first question.",
+                                color = TextMuted,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                } else {
+                    questions.forEach { question ->
+                        key(question.id) {
+                            val qIndex = questions.indexOfFirst { it.id == question.id }
+                            QuestionEditorCard(
+                                index = if (qIndex != -1) qIndex else 0,
+                                question = question,
+                                aiManager = aiManager,
+                                onUpdate = { updated ->
+                                    val idx = questions.indexOfFirst { it.id == question.id }
+                                    if (idx in questions.indices) {
+                                        questions[idx] = updated
+                                        isModified = true
+                                        errorMessage = null
+                                    }
+                                },
+                                onDelete = {
+                                    questions.removeAll { it.id == question.id }
+                                    isModified = true
+                                    errorMessage = null
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
 
                 GlassPrimaryButton(
-                    text = "Save Quiz",
-                    onClick = {
-                        if (title.isBlank()) {
-                            errorMessage = "Title cannot be empty"
-                            return@GlassPrimaryButton
-                        }
-                        if (questions.isEmpty()) {
-                            errorMessage = "Must have at least one question"
-                            return@GlassPrimaryButton
-                        }
-                        val invalidQ = questions.find { q ->
-                            if (q.question.isBlank()) true
-                            else if (q.type == QuestionType.MCQ && (q.options.size < 2 || q.options.any { it.isBlank() })) true
-                            else if (q.type == QuestionType.FILL_BLANK && q.fillBlankAnswer.isBlank() && q.acceptedAnswers.isEmpty()) true
-                            else false
-                        }
-                        if (invalidQ != null) {
-                            errorMessage = "Please complete all fields for every question"
-                            return@GlassPrimaryButton
-                        }
-
-                        val schema = QuizSchema(
-                            title = title.trim(),
-                            description = description.trim(),
-                            category = category.trim(),
-                            difficulty = difficulty.trim(),
-                            timeLimit = timeLimit,
-                            shuffleQuestions = shuffleQuestions,
-                            shuffleOptions = shuffleOptions,
-                            questions = questions.toList()
-                        )
-                        scope.launch { onSaveQuiz(schema) }
-                    },
+                    text = if (isSaving) "Saving Quiz..." else "Save Quiz",
+                    onClick = { handleSave() },
+                    enabled = !isSaving,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(50.dp))
+                Spacer(modifier = Modifier.height(60.dp))
             }
         }
     }
@@ -578,7 +947,7 @@ fun QuestionEditorCard(
                                                 }
                                             }
                                         } catch (e: Exception) {
-                                            // Handled safely
+                                            // Safely ignore verification error
                                         } finally {
                                             isVerifying = false
                                         }
@@ -692,11 +1061,19 @@ fun QuestionEditorCard(
                     isSelected = question.type == QuestionType.MCQ,
                     onClick = {
                         if (question.type != QuestionType.MCQ) {
+                            val defaultOptions = if (question.options.size >= 2) {
+                                question.options
+                            } else {
+                                val optA = question.fillBlankAnswer.ifBlank { "Option A" }
+                                listOf(optA, "Option B", "Option C", "Option D")
+                            }
                             onUpdate(
                                 question.copy(
                                     type = QuestionType.MCQ,
-                                    options = if (question.options.size >= 2) question.options else listOf("Option A", "Option B", "Option C", "Option D"),
-                                    answer = 0
+                                    options = defaultOptions,
+                                    answer = 0,
+                                    fillBlankAnswer = "",
+                                    acceptedAnswers = emptyList()
                                 )
                             )
                         }
@@ -707,12 +1084,20 @@ fun QuestionEditorCard(
                     isSelected = question.type == QuestionType.FILL_BLANK,
                     onClick = {
                         if (question.type != QuestionType.FILL_BLANK) {
-                            val defaultAns = question.options.getOrNull(question.answer) ?: "Answer"
+                            val defaultAns = question.options.getOrNull(question.answer)
+                                ?: question.options.firstOrNull()
+                                ?: "Answer"
                             onUpdate(
                                 question.copy(
                                     type = QuestionType.FILL_BLANK,
+                                    options = emptyList(),
+                                    answer = 0,
                                     fillBlankAnswer = question.fillBlankAnswer.ifEmpty { defaultAns },
-                                    acceptedAnswers = if (question.acceptedAnswers.isNotEmpty()) question.acceptedAnswers else listOf(defaultAns)
+                                    acceptedAnswers = if (question.acceptedAnswers.isNotEmpty()) {
+                                        question.acceptedAnswers
+                                    } else {
+                                        listOf(defaultAns)
+                                    }
                                 )
                             )
                         }
@@ -777,8 +1162,39 @@ fun QuestionEditorCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Answer index safety warning (Requirement 8)
+                val isAnswerIndexValid = question.options.isNotEmpty() && question.answer in question.options.indices
+                if (!isAnswerIndexValid) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(WrongRed.copy(alpha = 0.2f))
+                            .border(1.dp, WrongRed, RoundedCornerShape(10.dp))
+                            .padding(10.dp)
+                    ) {
+                        Column {
+                            Text(
+                                text = "⚠️ Invalid Answer Index (${question.answer})",
+                                color = WrongRed,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "The correct answer index is out of bounds (valid range: 0..${question.options.lastIndex.coerceAtLeast(0)}). Tap one of the option letters below to select the correct answer.",
+                                color = Color.White,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
                 question.options.forEachIndexed { optIdx, optText ->
                     val isCorrect = (optIdx == question.answer)
+                    val optLetter = if (optIdx in 0..25) "${'A' + optIdx}" else "${optIdx + 1}"
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -787,29 +1203,98 @@ fun QuestionEditorCard(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(28.dp)
+                                .size(32.dp)
                                 .clip(CircleShape)
                                 .background(if (isCorrect) CorrectGreen else Color(0x30FFFFFF))
-                                .clickable { onUpdate(question.copy(answer = optIdx)) },
+                                .clickable {
+                                    onUpdate(question.copy(answer = optIdx))
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             if (isCorrect) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Correct Answer",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             } else {
-                                Text(text = "${('A' + optIdx)}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = optLetter,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
 
                         Spacer(modifier = Modifier.width(10.dp))
 
                         EditorTextField(
-                            label = "Option ${('A' + optIdx)}",
+                            label = "Option $optLetter",
                             value = optText,
                             onValueChange = { newText ->
-                                val newOptions = question.options.toMutableList().apply { set(optIdx, newText) }
-                                onUpdate(question.copy(options = newOptions))
+                                val newOptions = question.options.toMutableList()
+                                if (optIdx in newOptions.indices) {
+                                    newOptions[optIdx] = newText
+                                    onUpdate(question.copy(options = newOptions))
+                                }
                             },
                             modifier = Modifier.weight(1f)
+                        )
+
+                        // Option delete button if more than 2 options
+                        if (question.options.size > 2) {
+                            IconButton(
+                                onClick = {
+                                    val newOptions = question.options.toMutableList().apply { removeAt(optIdx) }
+                                    val newAnswer = when {
+                                        question.answer == optIdx -> 0
+                                        question.answer > optIdx -> question.answer - 1
+                                        else -> question.answer
+                                    }.coerceIn(0, newOptions.lastIndex)
+                                    onUpdate(question.copy(options = newOptions, answer = newAnswer))
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Remove Option",
+                                    tint = Color(0x99FFFFFF),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Add Option button
+                if (question.options.size < 8) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x18FFFFFF))
+                            .clickable {
+                                val nextLetter = if (question.options.size in 0..25) "${'A' + question.options.size}" else "${question.options.size + 1}"
+                                val newOptions = question.options + "Option $nextLetter"
+                                onUpdate(question.copy(options = newOptions))
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            tint = AccentBlueLight,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Add Option",
+                            color = AccentBlueLight,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }

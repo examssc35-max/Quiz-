@@ -266,12 +266,12 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                     )
                 }
                 is Screen.QuizEditor -> {
-                    val existing = screen.existingQuizId?.let { id -> allQuizzes.find { it.id == id } }
                     QuizEditorScreen(
-                        existingQuiz = existing,
+                        existingQuizId = screen.existingQuizId,
+                        repository = viewModel.repository,
                         onBackClick = { viewModel.navigateTo(Screen.Quizzes) },
-                        onSaveQuiz = { schema ->
-                            viewModel.saveQuiz(schema, existing?.id)
+                        onSaveQuiz = { schema, quizId ->
+                            viewModel.saveQuiz(schema, quizId)
                             viewModel.navigateTo(Screen.Quizzes)
                         },
                         aiManager = viewModel.aiManager

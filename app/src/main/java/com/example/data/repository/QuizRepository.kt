@@ -67,6 +67,9 @@ class QuizRepository(private val database: AppDatabase) {
             auditLogJson = existing?.auditLogJson
         )
         database.quizDao().insertQuiz(entity)
+        if (existingId != null) {
+            database.unfinishedQuizDao().deleteUnfinishedQuiz(existingId)
+        }
         id
     }
 

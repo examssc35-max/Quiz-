@@ -9,9 +9,11 @@ enum class QuestionType {
 
     companion object {
         fun fromString(typeStr: String?): QuestionType? {
-            return when (typeStr?.lowercase()?.trim()) {
-                "mcq" -> MCQ
-                "fill_blank", "fill-in-the-blank", "fillblank", "fill_in_the_blank" -> FILL_BLANK
+            if (typeStr == null) return null
+            val normalized = typeStr.lowercase().trim().replace("-", "_").replace(" ", "_")
+            return when (normalized) {
+                "mcq", "multiple_choice", "multiplechoice", "choice", "single_choice" -> MCQ
+                "fill_blank", "fill_in_the_blank", "fillblank", "fill_in", "fill", "blank", "text" -> FILL_BLANK
                 else -> null
             }
         }
@@ -110,6 +112,9 @@ data class QuestionSchema(
         } else {
             effectiveOptions.isNotEmpty() && effectiveAnswerIndex in effectiveOptions.indices
         }
+
+    val isAnswerIndexValid: Boolean
+        get() = (type != QuestionType.MCQ) || (options.isNotEmpty() && answer in options.indices)
 }
 
 object QuizJsonParser {
@@ -193,7 +198,23 @@ object QuizJsonParser {
                         optionsList.add(optionsArray.getString(j).trim())
                     }
 
-                    val answerIndex = qObj.optInt("answer", -1)
+                    val rawAnswer = if (qObj.has("answer")) qObj.get("answer") else -1
+                    val answerIndex = when (rawAnswer) {
+                        is Number -> rawAnswer.toInt()
+                        is String -> {
+                            val trimmed = rawAnswer.trim()
+                            val asInt = trimmed.toIntOrNull()
+                            if (asInt != null) {
+                                asInt
+                            } else if (trimmed.length == 1 && trimmed[0].uppercaseChar() in 'A'..'Z') {
+                                trimmed[0].uppercaseChar() - 'A'
+                            } else {
+                                val matchIdx = optionsList.indexOfFirst { it.trim().equals(trimmed, ignoreCase = true) }
+                                if (matchIdx != -1) matchIdx else -1
+                            }
+                        }
+                        else -> -1
+                    }
                     if (answerIndex < 0 || answerIndex >= optionsList.size) {
                         throw IllegalArgumentException(
                             "Question #${i + 1} has invalid answer index $answerIndex (must be between 0 and ${optionsList.size - 1})"
@@ -414,5 +435,265 @@ object QuizJsonParser {
         root.put("questions", questionsArray)
 
         return root.toString(indentSpaces)
+    }
+
+    /**
+     * Lenient parser designed for the Quiz Editor and loading existing/imported/legacy quizzes.
+     * Never crashes on missing optional fields, missing question types, or out-of-range answer indices.
+     * Preserves question properties so the user can inspect, correct, and edit them safely.
+     */
+    fun parseLenient(jsonString: String): Result<QuizSchema> {
+        return runCatching {
+            val trimmed = jsonString.trim()
+            if (trimmed.isEmpty()) {
+                throw IllegalArgumentException("JSON content is empty")
+            }
+            val root = JSONObject(trimmed)
+
+            val version = root.optInt("version", 1)
+            val title = root.optString("title", "").trim().ifBlank { "Untitled Quiz" }
+            val description = root.optString("description", "")
+            val category = root.optString("category", "General").ifBlank { "General" }
+            val difficulty = root.optString("difficulty", "Medium").ifBlank { "Medium" }
+            val timeLimit = root.optInt("timeLimit", 0).coerceAtLeast(0)
+            val shuffleQuestions = root.optBoolean("shuffleQuestions", false)
+            val shuffleOptions = root.optBoolean("shuffleOptions", false)
+
+            val questions = mutableListOf<QuestionSchema>()
+            val questionsArray = root.optJSONArray("questions")
+
+            if (questionsArray != null) {
+                val ids = mutableSetOf<String>()
+                for (i in 0 until questionsArray.length()) {
+                    val qObj = questionsArray.optJSONObject(i) ?: continue
+                    val id = qObj.optString("id", "q_${i + 1}").ifBlank { "q_${i + 1}" }
+                    val uniqueId = if (ids.add(id)) id else "${id}_${i + 1}"
+
+                    val questionText = qObj.optString("question", "").trim().ifBlank { "Question ${i + 1}" }
+
+                    // Detect question type with full backward compatibility
+                    val rawType = qObj.optString("type", "").trim()
+                    val parsedType = QuestionType.fromString(rawType)
+                    val questionType = when {
+                        parsedType != null -> parsedType
+                        qObj.has("options") -> QuestionType.MCQ
+                        qObj.has("answer") && (qObj.get("answer") is String || qObj.get("answer") is JSONArray) -> QuestionType.FILL_BLANK
+                        else -> if (qObj.has("options")) QuestionType.MCQ else QuestionType.FILL_BLANK
+                    }
+
+                    val points = qObj.optInt("points", 1).coerceAtLeast(1)
+                    val explanation = if (qObj.has("explanation") && !qObj.isNull("explanation")) {
+                        qObj.optString("explanation", "").trim().ifEmpty { null }
+                    } else null
+
+                    // Verification fields
+                    val isVerified = qObj.optBoolean("is_verified", qObj.optBoolean("isVerified", false))
+                    val confidence = qObj.optDouble("confidence", qObj.optDouble("verificationConfidence", 0.0))
+                    val reason = qObj.optString("reason", qObj.optString("verificationReason", "")).ifBlank { null }
+                    val needsReview = qObj.optBoolean("needs_review", qObj.optBoolean("needsReview", false))
+                    val verifiedExplanation = qObj.optString("corrected_explanation", qObj.optString("verifiedExplanation", "")).ifBlank { null }
+                    val lastVerifiedAt = if (qObj.has("last_verified_at")) qObj.optLong("last_verified_at") else if (qObj.has("lastVerifiedAt")) qObj.optLong("lastVerifiedAt") else null
+
+                    if (questionType == QuestionType.MCQ) {
+                        val optionsList = mutableListOf<String>()
+                        val optionsArray = qObj.optJSONArray("options")
+                        if (optionsArray != null) {
+                            for (j in 0 until optionsArray.length()) {
+                                optionsList.add(optionsArray.opt(j)?.toString()?.trim() ?: "")
+                            }
+                        }
+                        if (optionsList.isEmpty()) {
+                            optionsList.add("Option A")
+                            optionsList.add("Option B")
+                        }
+
+                        // Parse answer index safely:
+                        val rawAnswer = if (qObj.has("answer")) qObj.get("answer") else 0
+                        val answerIndex = when (rawAnswer) {
+                            is Number -> rawAnswer.toInt()
+                            is String -> {
+                                val t = rawAnswer.trim()
+                                val asInt = t.toIntOrNull()
+                                if (asInt != null) {
+                                    asInt
+                                } else if (t.length == 1 && t[0].uppercaseChar() in 'A'..'Z') {
+                                    t[0].uppercaseChar() - 'A'
+                                } else {
+                                    val idx = optionsList.indexOfFirst { it.trim().equals(t, ignoreCase = true) }
+                                    if (idx != -1) idx else 0
+                                }
+                            }
+                            else -> 0
+                        }
+
+                        val verifiedAnswerIndex = when {
+                            qObj.has("verified_answer_index") -> qObj.optInt("verified_answer_index")
+                            qObj.has("verifiedAnswerIndex") -> qObj.optInt("verifiedAnswerIndex")
+                            qObj.has("verified_answer") && qObj.get("verified_answer") is Number -> qObj.optInt("verified_answer")
+                            qObj.has("verifiedAnswer") && qObj.get("verifiedAnswer") is Number -> qObj.optInt("verifiedAnswer")
+                            else -> null
+                        }
+
+                        val correctedOptionsList = if (qObj.has("corrected_options")) {
+                            val corrArr = qObj.getJSONArray("corrected_options")
+                            val list = mutableListOf<String>()
+                            for (idx in 0 until corrArr.length()) list.add(corrArr.getString(idx).trim())
+                            list
+                        } else null
+
+                        questions.add(
+                            QuestionSchema(
+                                id = uniqueId,
+                                type = QuestionType.MCQ,
+                                question = questionText,
+                                options = optionsList,
+                                answer = answerIndex,
+                                points = points,
+                                explanation = explanation,
+                                verifiedAnswerIndex = verifiedAnswerIndex,
+                                isVerified = isVerified,
+                                verificationConfidence = confidence,
+                                verificationReason = reason,
+                                needsReview = needsReview,
+                                verifiedExplanation = verifiedExplanation,
+                                lastVerifiedAt = lastVerifiedAt,
+                                correctedOptions = correctedOptionsList
+                            )
+                        )
+                    } else {
+                        // FILL_BLANK
+                        val acceptedAnswers = mutableListOf<String>()
+                        val rawAnswer = if (qObj.has("answer")) qObj.get("answer") else ""
+                        when (rawAnswer) {
+                            is JSONArray -> {
+                                for (j in 0 until rawAnswer.length()) {
+                                    val item = rawAnswer.opt(j)?.toString()?.trim() ?: ""
+                                    if (item.isNotEmpty() && !acceptedAnswers.contains(item)) {
+                                        acceptedAnswers.add(item)
+                                    }
+                                }
+                            }
+                            is String -> {
+                                val s = rawAnswer.trim()
+                                if (s.isNotEmpty()) acceptedAnswers.add(s)
+                            }
+                            is Number -> {
+                                val s = rawAnswer.toString().trim()
+                                if (s.isNotEmpty()) acceptedAnswers.add(s)
+                            }
+                            else -> {
+                                val s = rawAnswer.toString().trim()
+                                if (s.isNotEmpty() && s != "null") acceptedAnswers.add(s)
+                            }
+                        }
+
+                        val extraArr = qObj.optJSONArray("acceptedAnswers") ?: qObj.optJSONArray("accepted_answers")
+                        if (extraArr != null) {
+                            for (j in 0 until extraArr.length()) {
+                                val item = extraArr.opt(j)?.toString()?.trim() ?: ""
+                                if (item.isNotEmpty() && !acceptedAnswers.contains(item)) {
+                                    acceptedAnswers.add(item)
+                                }
+                            }
+                        }
+
+                        val primaryAnswer = qObj.optString("fillBlankAnswer", "").trim().ifEmpty {
+                            qObj.optString("fill_blank_answer", "").trim().ifEmpty {
+                                acceptedAnswers.firstOrNull() ?: ""
+                            }
+                        }
+                        if (primaryAnswer.isNotEmpty() && !acceptedAnswers.contains(primaryAnswer)) {
+                            acceptedAnswers.add(0, primaryAnswer)
+                        }
+
+                        val verifiedFillBlankAnswer = when {
+                            qObj.has("verified_fill_blank_answer") -> qObj.optString("verified_fill_blank_answer")
+                            qObj.has("verifiedFillBlankAnswer") -> qObj.optString("verifiedFillBlankAnswer")
+                            qObj.has("verified_answer") && qObj.get("verified_answer") is String -> qObj.optString("verified_answer")
+                            qObj.has("verifiedAnswer") && qObj.get("verifiedAnswer") is String -> qObj.optString("verifiedAnswer")
+                            else -> null
+                        }?.ifBlank { null }
+
+                        val verifiedAcceptedList = if (qObj.has("verified_accepted_answers")) {
+                            val vArr = qObj.getJSONArray("verified_accepted_answers")
+                            val list = mutableListOf<String>()
+                            for (idx in 0 until vArr.length()) list.add(vArr.getString(idx).trim())
+                            list
+                        } else null
+
+                        questions.add(
+                            QuestionSchema(
+                                id = uniqueId,
+                                type = QuestionType.FILL_BLANK,
+                                question = questionText,
+                                options = emptyList(),
+                                answer = 0,
+                                fillBlankAnswer = primaryAnswer,
+                                acceptedAnswers = acceptedAnswers,
+                                points = points,
+                                explanation = explanation,
+                                verifiedFillBlankAnswer = verifiedFillBlankAnswer,
+                                verifiedAcceptedAnswers = verifiedAcceptedList,
+                                isVerified = isVerified,
+                                verificationConfidence = confidence,
+                                verificationReason = reason,
+                                needsReview = needsReview,
+                                verifiedExplanation = verifiedExplanation,
+                                lastVerifiedAt = lastVerifiedAt
+                            )
+                        )
+                    }
+                }
+            }
+
+            QuizSchema(
+                version = version,
+                title = title,
+                description = description,
+                category = category,
+                difficulty = difficulty,
+                timeLimit = timeLimit,
+                shuffleQuestions = shuffleQuestions,
+                shuffleOptions = shuffleOptions,
+                questions = questions
+            )
+        }
+    }
+
+    fun validateSchemaForSaving(schema: QuizSchema): List<String> {
+        val errors = mutableListOf<String>()
+        if (schema.title.isBlank()) {
+            errors.add("Quiz title cannot be empty")
+        }
+        if (schema.timeLimit < 0) {
+            errors.add("Time limit cannot be negative")
+        }
+        if (schema.questions.isEmpty()) {
+            errors.add("Quiz must contain at least one question")
+        }
+        schema.questions.forEachIndexed { idx, q ->
+            val num = idx + 1
+            if (q.question.isBlank()) {
+                errors.add("Question #$num: Question text cannot be empty")
+            }
+            if (q.points < 1) {
+                errors.add("Question #$num: Points must be at least 1")
+            }
+            if (q.type == QuestionType.MCQ) {
+                if (q.options.size < 2) {
+                    errors.add("Question #$num: Multiple choice question must have at least 2 options")
+                } else if (q.options.any { it.isBlank() }) {
+                    errors.add("Question #$num: All options must contain text")
+                }
+                if (q.options.isNotEmpty() && q.answer !in q.options.indices) {
+                    errors.add("Question #$num: Answer index (${q.answer}) is out of bounds (0..${q.options.lastIndex})")
+                }
+            } else if (q.type == QuestionType.FILL_BLANK) {
+                if (q.fillBlankAnswer.isBlank() && q.acceptedAnswers.isEmpty()) {
+                    errors.add("Question #$num: Fill-in-the-blank question requires at least one accepted answer")
+                }
+            }
+        }
+        return errors
     }
 }

@@ -10,21 +10,24 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -37,11 +40,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.AccentBlueLight
+import com.example.ui.theme.AccentCyan
 import com.example.ui.theme.GlassBorderBrush
 
 enum class NavigationTab(val label: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector) {
     HOME("Home", Icons.Filled.Home, Icons.Outlined.Home),
-    QUIZZES("Quizzes", Icons.Filled.MenuBook, Icons.Outlined.MenuBook),
+    QUIZZES("Quizzes", Icons.AutoMirrored.Filled.MenuBook, Icons.AutoMirrored.Outlined.MenuBook),
     STATS("Stats", Icons.Filled.BarChart, Icons.Outlined.BarChart),
     SETTINGS("Settings", Icons.Filled.Settings, Icons.Outlined.Settings)
 }
@@ -55,21 +59,22 @@ fun GlassBottomNavigation(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         GlassCard(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(68.dp),
-            shape = RoundedCornerShape(34.dp),
-            backgroundColor = Color(0x350F172A),
+                .height(70.dp),
+            shape = RoundedCornerShape(35.dp),
+            backgroundColor = Color(0xF20F172A),
             borderBrush = GlassBorderBrush
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(68.dp)
+                    .height(70.dp)
                     .padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically
@@ -77,21 +82,27 @@ fun GlassBottomNavigation(
                 NavigationTab.values().forEach { tab ->
                     val isSelected = (selectedTab == tab)
                     val iconColor by animateColorAsState(
-                        targetValue = if (isSelected) AccentBlueLight else Color(0x88FFFFFF),
+                        targetValue = if (isSelected) AccentCyan else Color(0xCC94A3B8),
                         label = "tab_icon_color"
+                    )
+                    val labelColor by animateColorAsState(
+                        targetValue = if (isSelected) Color.White else Color(0xCC94A3B8),
+                        label = "tab_label_color"
                     )
 
                     val interactionSource = remember { MutableInteractionSource() }
 
                     Column(
                         modifier = Modifier
+                            .heightIn(min = 48.dp)
                             .clip(RoundedCornerShape(20.dp))
+                            .background(if (isSelected) Color(0x353B82F6) else Color.Transparent)
                             .clickable(
                                 interactionSource = interactionSource,
-                                indication = null,
+                                indication = ripple(color = AccentBlueLight),
                                 onClick = { onTabSelected(tab) }
                             )
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
@@ -103,19 +114,11 @@ fun GlassBottomNavigation(
                         )
                         Text(
                             text = tab.label,
-                            color = iconColor,
+                            color = labelColor,
                             fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             modifier = Modifier.padding(top = 2.dp)
                         )
-                        if (isSelected) {
-                            Box(
-                                modifier = Modifier
-                                    .padding(top = 2.dp)
-                                    .size(4.dp)
-                                    .background(AccentBlueLight, CircleShape)
-                            )
-                        }
                     }
                 }
             }
