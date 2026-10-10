@@ -32,6 +32,31 @@ class AppSettings(context: Context) {
     private val _appLanguage = MutableStateFlow(prefs.getString(KEY_LANGUAGE, "English") ?: "English")
     val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
 
+    // Custom Theme Settings (User can choose custom theme presets or customize colors)
+    private val _themePresetId = MutableStateFlow(prefs.getString(KEY_THEME_PRESET, "deep_midnight") ?: "deep_midnight")
+    val themePresetId: StateFlow<String> = _themePresetId.asStateFlow()
+
+    private val _customPrimaryHex = MutableStateFlow(prefs.getString(KEY_CUSTOM_PRIMARY, "#3B82F6") ?: "#3B82F6")
+    val customPrimaryHex: StateFlow<String> = _customPrimaryHex.asStateFlow()
+
+    private val _customSecondaryHex = MutableStateFlow(prefs.getString(KEY_CUSTOM_SECONDARY, "#06B6D4") ?: "#06B6D4")
+    val customSecondaryHex: StateFlow<String> = _customSecondaryHex.asStateFlow()
+
+    private val _customBgHex = MutableStateFlow(prefs.getString(KEY_CUSTOM_BG, "#070E1E") ?: "#070E1E")
+    val customBgHex: StateFlow<String> = _customBgHex.asStateFlow()
+
+    // AI Voice Congratulation Settings (Unlimited words, custom words, and Bengali/English support)
+    private val _voiceCongratulationMode = MutableStateFlow(prefs.getString(KEY_VOICE_CONG_MODE, "unlimited_ai") ?: "unlimited_ai")
+    val voiceCongratulationMode: StateFlow<String> = _voiceCongratulationMode.asStateFlow()
+
+    private val _voiceLanguage = MutableStateFlow(prefs.getString(KEY_VOICE_LANGUAGE, "auto") ?: "auto")
+    val voiceLanguage: StateFlow<String> = _voiceLanguage.asStateFlow()
+
+    private val _customCongratulationWords = MutableStateFlow(
+        prefs.getString(KEY_CUSTOM_CONG_WORDS, "সাবাশ, অসাধারণ, মারহাবা, দারুণ, চমৎকার, Bravo, Outstanding, Fantastic, Mind blowing") ?: "সাবাশ, অসাধারণ, মারহাবা, দারুণ, চমৎকার, Bravo, Outstanding, Fantastic, Mind blowing"
+    )
+    val customCongratulationWords: StateFlow<String> = _customCongratulationWords.asStateFlow()
+
     fun setSoundEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SOUND, enabled).apply()
         _soundEnabled.value = enabled
@@ -67,6 +92,44 @@ class AppSettings(context: Context) {
         _appLanguage.value = language
     }
 
+    fun setThemePresetId(presetId: String) {
+        prefs.edit().putString(KEY_THEME_PRESET, presetId).apply()
+        _themePresetId.value = presetId
+    }
+
+    fun setCustomColors(primaryHex: String, secondaryHex: String, bgHex: String? = null) {
+        val editor = prefs.edit()
+            .putString(KEY_CUSTOM_PRIMARY, primaryHex)
+            .putString(KEY_CUSTOM_SECONDARY, secondaryHex)
+        if (bgHex != null) {
+            editor.putString(KEY_CUSTOM_BG, bgHex)
+            _customBgHex.value = bgHex
+        }
+        editor.apply()
+        _customPrimaryHex.value = primaryHex
+        _customSecondaryHex.value = secondaryHex
+    }
+
+    fun setCustomBgColor(bgHex: String) {
+        prefs.edit().putString(KEY_CUSTOM_BG, bgHex).apply()
+        _customBgHex.value = bgHex
+    }
+
+    fun setVoiceCongratulationMode(mode: String) {
+        prefs.edit().putString(KEY_VOICE_CONG_MODE, mode).apply()
+        _voiceCongratulationMode.value = mode
+    }
+
+    fun setVoiceLanguage(language: String) {
+        prefs.edit().putString(KEY_VOICE_LANGUAGE, language).apply()
+        _voiceLanguage.value = language
+    }
+
+    fun setCustomCongratulationWords(words: String) {
+        prefs.edit().putString(KEY_CUSTOM_CONG_WORDS, words).apply()
+        _customCongratulationWords.value = words
+    }
+
     companion object {
         private const val KEY_SOUND = "key_sound"
         private const val KEY_VOICE = "key_voice"
@@ -75,6 +138,13 @@ class AppSettings(context: Context) {
         private const val KEY_THEME = "key_theme"
         private const val KEY_BLUR = "key_blur"
         private const val KEY_LANGUAGE = "key_language"
+        private const val KEY_THEME_PRESET = "key_theme_preset"
+        private const val KEY_CUSTOM_PRIMARY = "key_custom_primary"
+        private const val KEY_CUSTOM_SECONDARY = "key_custom_secondary"
+        private const val KEY_CUSTOM_BG = "key_custom_bg"
+        private const val KEY_VOICE_CONG_MODE = "key_voice_cong_mode"
+        private const val KEY_VOICE_LANGUAGE = "key_voice_language"
+        private const val KEY_CUSTOM_CONG_WORDS = "key_custom_cong_words"
 
         @Volatile
         private var INSTANCE: AppSettings? = null

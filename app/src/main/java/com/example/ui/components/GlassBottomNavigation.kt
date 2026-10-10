@@ -71,6 +71,7 @@ fun GlassBottomNavigation(
             backgroundColor = Color(0xF20F172A),
             borderBrush = GlassBorderBrush
         ) {
+            val theme = com.example.ui.theme.LocalAppTheme.current
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -82,7 +83,7 @@ fun GlassBottomNavigation(
                 NavigationTab.values().forEach { tab ->
                     val isSelected = (selectedTab == tab)
                     val iconColor by animateColorAsState(
-                        targetValue = if (isSelected) AccentCyan else Color(0xCC94A3B8),
+                        targetValue = if (isSelected) theme.secondary else Color(0xCC94A3B8),
                         label = "tab_icon_color"
                     )
                     val labelColor by animateColorAsState(
@@ -96,10 +97,10 @@ fun GlassBottomNavigation(
                         modifier = Modifier
                             .heightIn(min = 48.dp)
                             .clip(RoundedCornerShape(20.dp))
-                            .background(if (isSelected) Color(0x353B82F6) else Color.Transparent)
+                            .background(if (isSelected) theme.primary.copy(alpha = 0.22f) else Color.Transparent)
                             .clickable(
                                 interactionSource = interactionSource,
-                                indication = ripple(color = AccentBlueLight),
+                                indication = ripple(color = theme.primaryLight),
                                 onClick = { onTabSelected(tab) }
                             )
                             .padding(horizontal = 16.dp, vertical = 6.dp),

@@ -45,6 +45,8 @@ fun GlassScoreGauge(
         )
     }
 
+    val theme = com.example.ui.theme.LocalAppTheme.current
+
     Box(
         modifier = modifier.size(size),
         contentAlignment = Alignment.Center
@@ -73,10 +75,10 @@ fun GlassScoreGauge(
             drawArc(
                 brush = Brush.sweepGradient(
                     listOf(
-                        AccentCyan,
-                        AccentTeal,
-                        Color(0xFF3B82F6),
-                        AccentCyan
+                        theme.secondary,
+                        theme.primaryLight,
+                        theme.primary,
+                        theme.secondary
                     )
                 ),
                 startAngle = -90f,

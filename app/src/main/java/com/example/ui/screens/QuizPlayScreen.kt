@@ -96,6 +96,8 @@ fun QuizPlayScreen(
     voiceEnabled: Boolean,
     vibrationEnabled: Boolean,
     showExplanationsSetting: Boolean,
+    customCongratulationWords: String = "",
+    voiceLanguage: String = "auto",
     onQuizCompleted: (summary: QuizResultSummary) -> Unit,
     onExitQuiz: () -> Unit,
     modifier: Modifier = Modifier
@@ -342,7 +344,9 @@ fun QuizPlayScreen(
                                                     isCorrect = true,
                                                     streak = feedback.streak,
                                                     voiceEnabled = voiceEnabled,
-                                                    isBengaliQuiz = isBengali
+                                                    isBengaliQuiz = isBengali,
+                                                    customWordsString = customCongratulationWords,
+                                                    languagePref = voiceLanguage
                                                 )
                                             } else {
                                                 soundManager.playWrongSound(soundEnabled)
@@ -351,7 +355,9 @@ fun QuizPlayScreen(
                                                     isCorrect = false,
                                                     streak = feedback.streak,
                                                     voiceEnabled = voiceEnabled,
-                                                    isBengaliQuiz = isBengali
+                                                    isBengaliQuiz = isBengali,
+                                                    customWordsString = customCongratulationWords,
+                                                    languagePref = voiceLanguage
                                                 )
                                             }
                                         }
@@ -412,7 +418,9 @@ fun QuizPlayScreen(
                                             isCorrect = feedback.isCorrect,
                                             streak = feedback.streak,
                                             voiceEnabled = voiceEnabled,
-                                            isBengaliQuiz = isBengali
+                                            isBengaliQuiz = isBengali,
+                                            customWordsString = customCongratulationWords,
+                                            languagePref = voiceLanguage
                                         )
                                     } else if (engine.mode == QuizMode.EXAM) {
                                         soundManager.playClickSound(soundEnabled)

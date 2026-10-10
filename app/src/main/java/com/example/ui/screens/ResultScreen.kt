@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -76,11 +78,21 @@ import com.example.ui.theme.WrongRedBorder
 fun ResultScreen(
     summary: QuizResultSummary,
     aiManager: AIManager? = null,
+    voiceEnabled: Boolean = true,
+    onHearVoiceCongratulations: (() -> Unit)? = null,
+    onShareResultClick: (() -> Unit)? = null,
     onReviewClick: () -> Unit,
     onTryAgainClick: () -> Unit,
     onBackHomeClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Automatically trigger voice congratulations celebration when result screen is shown
+    LaunchedEffect(Unit) {
+        if (voiceEnabled) {
+            onHearVoiceCongratulations?.invoke()
+        }
+    }
+
     val quote = when {
         summary.accuracy >= 80f -> "“Outstanding! Your hard work is truly paying off!”"
         summary.accuracy >= 60f -> "“Great effort! Every question makes you smarter!”"
@@ -111,7 +123,37 @@ fun ResultScreen(
             fontWeight = FontWeight.Bold
         )
 
-        Spacer(modifier = Modifier.height(26.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // AI Voice Congratulation Celebration Banner (Unlimited Words)
+        if (onHearVoiceCongratulations != null) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0x3506B6D4))
+                    .border(1.dp, Color(0x6006B6D4), RoundedCornerShape(16.dp))
+                    .clickable { onHearVoiceCongratulations() }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.VolumeUp,
+                    contentDescription = "Voice Celebration",
+                    tint = AccentCyan,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "🔊 Hear AI Congratulations / প্রশংসা শুনুন",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Large Circular Score Gauge matching screen 5
         GlassScoreGauge(
@@ -201,7 +243,24 @@ fun ResultScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (onShareResultClick != null) {
+            GlassSecondaryButton(
+                text = "Share Score & Result (শেয়ার করুন)",
+                onClick = onShareResultClick,
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
         // Bottom Row: "Try Again" & "Back Home"
         Row(

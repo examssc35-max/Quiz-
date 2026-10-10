@@ -107,38 +107,102 @@ class AppSoundManager(private val context: Context) {
     /**
      * AI Voice appreciation system for Practice Mode.
      * Respects cooldown, avoids repeat, works offline via Android TextToSpeech.
+     * Leverages AIVoiceCongratulationEngine for unlimited words.
      */
     fun speakAppreciation(
         isCorrect: Boolean,
         streak: Int,
         voiceEnabled: Boolean,
-        isBengaliQuiz: Boolean = false
+        isBengaliQuiz: Boolean = false,
+        customWordsString: String = "",
+        languagePref: String = "auto"
     ) {
         if (!voiceEnabled || !isTtsInitialized) return
 
         val now = System.currentTimeMillis()
-        // Minimum 2.5 second cooldown between voice cheers
-        if (now - lastSpeechTimeMs < 2500L) return
+        // Minimum 2.2 second cooldown between voice cheers
+        if (now - lastSpeechTimeMs < 2200L) return
 
-        val phrase = if (isCorrect) {
-            when {
-                streak >= 5 -> listOf("Incredible streak!", "You are unstoppable!", "Spectacular!", "Outstanding!").random()
-                streak >= 3 -> listOf("Brilliant!", "Excellent work!", "Keep it up!", "Amazing!").random()
-                streak == 2 -> listOf("Good job!", "Great!", "Well done!").random()
-                else -> null // Don't speak on first correct answer to avoid noise
+        val customWords = customWordsString
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        val phrase = AIVoiceCongratulationEngine.generateAppreciationPhrase(
+            isCorrect = isCorrect,
+            streak = streak,
+            isBengaliQuiz = isBengaliQuiz,
+            customWords = customWords,
+            languagePref = languagePref
+        )
+
+        if (!phrase.isNullOrBlank()) {
+            lastSpeechTimeMs = now
+            val useBengali = when (languagePref) {
+                "bn" -> true
+                "en" -> false
+                else -> isBengaliQuiz || phrase.any { it in '\u0980'..'\u09FF' }
             }
-        } else {
-            // Encouraging & supportive for wrong answers, never shaming
-            listOf("Keep trying!", "You can do it!", "Don't give up!").random()
+            speakInternal(phrase, useBengali, "appreciation_$now")
+        }
+    }
+
+    /**
+     * Speaks dynamic unlimited congratulations upon Quiz Completion / Result screen.
+     */
+    fun speakResultCongratulations(
+        summary: com.example.data.model.QuizResultSummary,
+        voiceEnabled: Boolean,
+        isBengaliQuiz: Boolean = false,
+        customWordsString: String = "",
+        languagePref: String = "auto"
+    ) {
+        if (!voiceEnabled || !isTtsInitialized) return
+
+        val customWords = customWordsString
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        val phrase = AIVoiceCongratulationEngine.generateQuizCompletionCongratulations(
+            summary = summary,
+            isBengaliQuiz = isBengaliQuiz,
+            customWords = customWords,
+            languagePref = languagePref
+        )
+
+        val useBengali = when (languagePref) {
+            "bn" -> true
+            "en" -> false
+            else -> isBengaliQuiz || phrase.any { it in '\u0980'..'\u09FF' }
         }
 
-        if (phrase != null) {
-            lastSpeechTimeMs = now
-            try {
-                tts?.speak(phrase, TextToSpeech.QUEUE_FLUSH, null, "appreciation_$now")
-            } catch (e: Exception) {
-                // Ignore
+        speakInternal(phrase, useBengali, "result_${System.currentTimeMillis()}")
+    }
+
+    /**
+     * Directly speaks any test or custom phrase (useful for Settings preview).
+     */
+    fun speakCustomText(text: String, isBengali: Boolean = false) {
+        if (!isTtsInitialized || text.isBlank()) return
+        val containsBengali = isBengali || text.any { it in '\u0980'..'\u09FF' }
+        speakInternal(text, containsBengali, "test_${System.currentTimeMillis()}")
+    }
+
+    private fun speakInternal(text: String, isBengali: Boolean, utteranceId: String) {
+        try {
+            if (isBengali) {
+                val bnLocale = Locale("bn", "BD")
+                val res = tts?.setLanguage(bnLocale)
+                if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    tts?.setLanguage(Locale.US)
+                }
+            } else {
+                tts?.setLanguage(Locale.US)
             }
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        } catch (e: Exception) {
+            // Graceful fallback
         }
     }
 

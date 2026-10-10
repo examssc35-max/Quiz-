@@ -58,7 +58,9 @@ class MainActivity : ComponentActivity() {
                 factory = QuizAppViewModelFactory(repository, appSettings, soundManager, aiManager)
             )
 
-            MyApplicationTheme {
+            val currentPalette by viewModel.currentThemePalette.collectAsState()
+
+            MyApplicationTheme(themePalette = currentPalette) {
                 QuizAppRoot(viewModel = viewModel)
             }
         }
@@ -84,6 +86,14 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
     val showExplanations by viewModel.appSettings.showExplanations.collectAsState()
     val blurIntensity by viewModel.appSettings.blurIntensity.collectAsState()
     val operationState by viewModel.operationState.collectAsState()
+
+    val themePresetId by viewModel.appSettings.themePresetId.collectAsState()
+    val customPrimaryHex by viewModel.appSettings.customPrimaryHex.collectAsState()
+    val customSecondaryHex by viewModel.appSettings.customSecondaryHex.collectAsState()
+    val customBgHex by viewModel.appSettings.customBgHex.collectAsState()
+    val voiceCongratulationMode by viewModel.appSettings.voiceCongratulationMode.collectAsState()
+    val voiceLanguage by viewModel.appSettings.voiceLanguage.collectAsState()
+    val customCongratulationWords by viewModel.appSettings.customCongratulationWords.collectAsState()
 
     val context = LocalContext.current
 
@@ -194,6 +204,7 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                         onDeleteQuiz = { quizId -> viewModel.deleteQuiz(quizId) },
                         onToggleFavorite = { quizId, current -> viewModel.toggleFavorite(quizId, current) },
                         onExportQuiz = { quizId -> viewModel.shareQuizJson(context, quizId) },
+                        onCopyQuizJson = { quizId -> viewModel.copyQuizJsonToClipboard(context, quizId) },
                         onCreateQuizClick = { viewModel.navigateTo(Screen.QuizEditor(null)) }
                     )
                 }
@@ -209,6 +220,8 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                             onToggleFavorite = { viewModel.toggleFavorite(quiz.id, quiz.isFavorite) },
                             onEditClick = { viewModel.navigateTo(Screen.QuizEditor(quiz.id)) },
                             onExportClick = { viewModel.shareQuizJson(context, quiz.id) },
+                            onShareTextClick = { viewModel.shareQuizJsonAsText(context, quiz.id) },
+                            onCopyJsonClick = { viewModel.copyQuizJsonToClipboard(context, quiz.id) },
                             onAuditQuiz = { viewModel.auditQuiz(quiz.id) },
                             onRevertAudit = { viewModel.revertQuizVerification(quiz.id) },
                             onCancelAudit = { viewModel.cancelAudit() }
@@ -225,15 +238,46 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                             voiceEnabled = voiceEnabled,
                             vibrationEnabled = vibrationEnabled,
                             showExplanationsSetting = showExplanations,
+                            customCongratulationWords = customCongratulationWords,
+                            voiceLanguage = voiceLanguage,
                             onQuizCompleted = { summary -> viewModel.onQuizCompleted(summary) },
                             onExitQuiz = { viewModel.saveUnfinishedCurrentQuiz() }
                         )
                     }
                 }
                 is Screen.Result -> {
+                    val summary = screen.summary
+                    val isBnQuiz = summary.quizTitle.any { it in '\u0980'..'\u09FF' }
+
+                    // Automatically play rich voice congratulations upon completing a quiz
+                    LaunchedEffect(summary) {
+                        if (voiceEnabled) {
+                            viewModel.soundManager.speakResultCongratulations(
+                                summary = summary,
+                                voiceEnabled = true,
+                                isBengaliQuiz = isBnQuiz,
+                                customWordsString = customCongratulationWords,
+                                languagePref = voiceLanguage
+                            )
+                        }
+                    }
+
                     ResultScreen(
-                        summary = screen.summary,
+                        summary = summary,
                         aiManager = viewModel.aiManager,
+                        voiceEnabled = voiceEnabled,
+                        onHearVoiceCongratulations = {
+                            viewModel.soundManager.speakResultCongratulations(
+                                summary = summary,
+                                voiceEnabled = true,
+                                isBengaliQuiz = isBnQuiz,
+                                customWordsString = customCongratulationWords,
+                                languagePref = voiceLanguage
+                            )
+                        },
+                        onShareResultClick = {
+                            viewModel.shareQuizResult(context, screen.summary)
+                        },
                         onReviewClick = { viewModel.navigateTo(Screen.Review(screen.summary)) },
                         onTryAgainClick = {
                             viewModel.startQuiz(screen.summary.quizId, screen.summary.mode, resume = false)
@@ -309,10 +353,18 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                         vibrationEnabled = vibrationEnabled,
                         showExplanations = showExplanations,
                         blurIntensity = blurIntensity,
+                        themePresetId = themePresetId,
+                        customPrimaryHex = customPrimaryHex,
+                        customSecondaryHex = customSecondaryHex,
+                        customBgHex = customBgHex,
+                        voiceCongratulationMode = voiceCongratulationMode,
+                        voiceLanguage = voiceLanguage,
+                        customCongratulationWords = customCongratulationWords,
                         onResetStats = { viewModel.resetStatistics() },
                         onRestoreDefaultQuizzes = { viewModel.restoreSampleQuizzes() },
                         onClearUnfinished = { viewModel.clearUnfinished() },
-                        onNavigateToAiSettings = { viewModel.navigateTo(Screen.AiSettings) }
+                        onNavigateToAiSettings = { viewModel.navigateTo(Screen.AiSettings) },
+                        onTestVoice = { isBn -> viewModel.testAiVoice(isBn) }
                     )
                 }
                 is Screen.AiSettings -> {

@@ -5,16 +5,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme = darkColorScheme(
-    primary = AccentBlueLight,
+val LocalAppTheme = staticCompositionLocalOf { ThemePalette.default }
+
+private fun buildDarkColorScheme(palette: ThemePalette) = darkColorScheme(
+    primary = palette.primary,
     onPrimary = Color.White,
-    primaryContainer = AccentBluePrimary,
+    primaryContainer = palette.primaryLight,
     onPrimaryContainer = Color.White,
-    secondary = AccentCyan,
+    secondary = palette.secondary,
     onSecondary = Color.Black,
-    background = Color(0xFF0B132B),
+    background = palette.backgroundDark,
     onBackground = TextPrimary,
     surface = Color(0xFF1C2541),
     onSurface = TextPrimary,
@@ -23,14 +27,14 @@ private val DarkColorScheme = darkColorScheme(
     outline = GlassBorder
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = AccentBluePrimary,
+private fun buildLightColorScheme(palette: ThemePalette) = lightColorScheme(
+    primary = palette.primary,
     onPrimary = Color.White,
-    primaryContainer = AccentBlueLight,
+    primaryContainer = palette.secondary,
     onPrimaryContainer = Color.White,
-    secondary = AccentCyan,
+    secondary = palette.secondary,
     onSecondary = Color.White,
-    background = Color(0xFF0F172A),
+    background = palette.backgroundDark,
     onBackground = TextPrimary,
     surface = Color(0xFF1E293B),
     onSurface = TextPrimary,
@@ -41,14 +45,17 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun MyApplicationTheme(
+    themePalette: ThemePalette = ThemePalette.default,
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val colorScheme = if (darkTheme) buildDarkColorScheme(themePalette) else buildLightColorScheme(themePalette)
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    CompositionLocalProvider(LocalAppTheme provides themePalette) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }

@@ -90,6 +90,7 @@ fun QuizListScreen(
     onDeleteQuiz: (quizId: String) -> Unit,
     onToggleFavorite: (quizId: String, currentFavorite: Boolean) -> Unit,
     onExportQuiz: (quizId: String) -> Unit,
+    onCopyQuizJson: (quizId: String) -> Unit = {},
     onCreateQuizClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -263,7 +264,8 @@ fun QuizListScreen(
                         onEditClick = { onEditQuiz(quiz.id) },
                         onDuplicateClick = { onDuplicateQuiz(quiz.id) },
                         onDeleteClick = { quizToDelete = quiz },
-                        onExportClick = { onExportQuiz(quiz.id) }
+                        onExportClick = { onExportQuiz(quiz.id) },
+                        onCopyJsonClick = { onCopyQuizJson(quiz.id) }
                     )
                 }
             }
@@ -318,6 +320,7 @@ fun QuizListItemCard(
     onDuplicateClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onExportClick: () -> Unit,
+    onCopyJsonClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -524,6 +527,35 @@ fun QuizListItemCard(
                         onClick = {
                             showMenu = false
                             onExportClick()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = "Copy JSON",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = Color.White,
+                            leadingIconColor = AccentCyan
+                        ),
+                        onClick = {
+                            showMenu = false
+                            onCopyJsonClick()
                         },
                         modifier = Modifier
                             .fillMaxWidth()

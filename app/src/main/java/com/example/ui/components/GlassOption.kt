@@ -80,11 +80,12 @@ fun GlassOption(
     )
 
     val shape = RoundedCornerShape(20.dp)
+    val theme = com.example.ui.theme.LocalAppTheme.current
 
     // Persistent background color based on answer state + temporary press illumination
     val backgroundColor by animateColorAsState(
         targetValue = when (state) {
-            OptionVisualState.SELECTED_BLUE -> Color(0x3D2563EB) // Distinct deep indigo/blue glass
+            OptionVisualState.SELECTED_BLUE -> theme.primary.copy(alpha = 0.24f) // Active theme highlight
             OptionVisualState.CORRECT_GREEN -> CorrectGreenBg
             OptionVisualState.WRONG_RED -> WrongRedBg
             OptionVisualState.REVEALED_CORRECT -> CorrectGreenBg.copy(alpha = 0.35f)
@@ -98,7 +99,7 @@ fun GlassOption(
     val borderStroke = when (state) {
         OptionVisualState.SELECTED_BLUE -> BorderStroke(
             2.dp,
-            Brush.linearGradient(listOf(Color(0xFF60A5FA), Color(0xFF2563EB)))
+            Brush.linearGradient(listOf(theme.primaryLight, theme.secondary))
         )
         OptionVisualState.CORRECT_GREEN -> BorderStroke(2.dp, CorrectGreenBorder)
         OptionVisualState.WRONG_RED -> BorderStroke(2.dp, WrongRedBorder)
@@ -110,7 +111,7 @@ fun GlassOption(
     }
 
     val badgeBgColor = when (state) {
-        OptionVisualState.SELECTED_BLUE -> Color(0xFF3B82F6) // Bright blue badge
+        OptionVisualState.SELECTED_BLUE -> theme.primary // Active theme badge
         OptionVisualState.CORRECT_GREEN -> CorrectGreen
         OptionVisualState.WRONG_RED -> WrongRed
         OptionVisualState.REVEALED_CORRECT -> CorrectGreen

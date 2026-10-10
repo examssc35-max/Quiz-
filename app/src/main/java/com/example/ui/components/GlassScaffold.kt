@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import com.example.R
+import com.example.ui.theme.LocalAppTheme
 
 @Composable
 fun GlassScaffold(
@@ -21,6 +22,7 @@ fun GlassScaffold(
     blurIntensity: String = "Medium",
     content: @Composable () -> Unit
 ) {
+    val currentTheme = LocalAppTheme.current
     val overlayAlpha = when (blurIntensity) {
         "Subtle" -> 0.65f
         "High" -> 0.88f
@@ -36,17 +38,32 @@ fun GlassScaffold(
             contentScale = ContentScale.Crop
         )
 
-        // Frosted vignette & dark moody overlay
+        // Frosted vignette & dynamic moody theme overlay
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color(0xFF070E1E).copy(alpha = overlayAlpha),
+                            currentTheme.backgroundDark.copy(alpha = overlayAlpha),
                             Color(0xFF0F172A).copy(alpha = overlayAlpha + 0.05f),
                             Color(0xFF050B14).copy(alpha = overlayAlpha + 0.1f)
                         )
+                    )
+                )
+        )
+
+        // Subtle atmospheric tint glow from theme primary accent
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            currentTheme.primary.copy(alpha = 0.12f),
+                            Color.Transparent
+                        ),
+                        radius = 1200f
                     )
                 )
         )

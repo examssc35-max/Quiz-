@@ -2,6 +2,9 @@ package com.example.ui
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.graphics.Color
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -18,12 +21,17 @@ import com.example.data.repository.QuizRepository
 import com.example.engine.QuizEngine
 import com.example.ui.components.NavigationTab
 import com.example.ui.navigation.Screen
+import com.example.ui.theme.ThemePalette
+import com.example.ui.theme.ThemePreset
+import com.example.ui.theme.parseHexColor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 
 class QuizAppViewModel(
     val repository: QuizRepository,
@@ -64,6 +72,27 @@ class QuizAppViewModel(
 
     private val _auditProgressState = MutableStateFlow(AuditProgressState())
     val auditProgressState: StateFlow<AuditProgressState> = _auditProgressState.asStateFlow()
+
+    val currentThemePalette: StateFlow<ThemePalette> = combine(
+        appSettings.themePresetId,
+        appSettings.customPrimaryHex,
+        appSettings.customSecondaryHex,
+        appSettings.customBgHex
+    ) { presetId, primaryHex, secondaryHex, bgHex ->
+        val preset = ThemePreset.fromId(presetId)
+        if (preset == ThemePreset.CUSTOM) {
+            ThemePalette.create(
+                id = "custom",
+                name = "Custom Theme",
+                bengaliName = "নিজের তৈরি থিম",
+                primary = parseHexColor(primaryHex, Color(0xFF3B82F6)),
+                secondary = parseHexColor(secondaryHex, Color(0xFF06B6D4)),
+                backgroundDark = parseHexColor(bgHex, Color(0xFF070E1E))
+            )
+        } else {
+            preset.palette
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThemePalette.default)
 
     private var auditJob: kotlinx.coroutines.Job? = null
 
@@ -303,16 +332,126 @@ class QuizAppViewModel(
 
     fun shareQuizJson(context: Context, quizId: String) {
         viewModelScope.launch {
+            try {
+                val quiz = repository.getQuizById(quizId) ?: return@launch
+                val safeTitle = quiz.title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(35).ifBlank { "quiz" }
+                val shareDir = File(context.cacheDir, "shared_quizzes").apply { mkdirs() }
+                val shareFile = File(shareDir, "${safeTitle}.json").apply {
+                    writeText(quiz.jsonContent)
+                }
+
+                val contentUri: Uri? = try {
+                    FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        shareFile
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+
+                val sendIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    if (contentUri != null) {
+                        putExtra(Intent.EXTRA_STREAM, contentUri)
+                        clipData = android.content.ClipData.newRawUri("${safeTitle}.json", contentUri)
+                        type = "application/json"
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } else {
+                        type = "text/plain"
+                    }
+                    putExtra(Intent.EXTRA_TEXT, quiz.jsonContent)
+                    putExtra(Intent.EXTRA_SUBJECT, "Quiz Explore: ${quiz.title}")
+                    putExtra(Intent.EXTRA_TITLE, "${quiz.title}.json")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                val chooser = Intent.createChooser(sendIntent, "Share '${quiz.title}' JSON").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
+            } catch (e: Exception) {
+                // Graceful fallback to clipboard copy
+                copyQuizJsonToClipboard(context, quizId)
+            }
+        }
+    }
+
+    fun shareQuizJsonAsText(context: Context, quizId: String) {
+        viewModelScope.launch {
+            try {
+                val quiz = repository.getQuizById(quizId) ?: return@launch
+                val sendIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    putExtra(Intent.EXTRA_TEXT, quiz.jsonContent)
+                    putExtra(Intent.EXTRA_SUBJECT, "Quiz Explore: ${quiz.title}")
+                    type = "text/plain"
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val chooser = Intent.createChooser(sendIntent, "Share '${quiz.title}' Content").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
+            } catch (e: Exception) {
+                copyQuizJsonToClipboard(context, quizId)
+            }
+        }
+    }
+
+    fun copyQuizJsonToClipboard(context: Context, quizId: String) {
+        viewModelScope.launch {
             val quiz = repository.getQuizById(quizId) ?: return@launch
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            val clip = android.content.ClipData.newPlainText("${quiz.title}.json", quiz.jsonContent)
+            clipboard?.setPrimaryClip(clip)
+            _operationState.value = QuizOperationState(
+                successMessage = "'${quiz.title}' JSON copied to clipboard!"
+            )
+        }
+    }
+
+    fun shareQuizResult(context: Context, summary: QuizResultSummary) {
+        try {
+            val text = buildString {
+                appendLine("🏆 Quiz Explore - Result")
+                appendLine("━━━━━━━━━━━━━━━━━━━")
+                appendLine("Quiz: ${summary.quizTitle}")
+                appendLine("Score: ${summary.score} / ${summary.maxScore}")
+                appendLine("Accuracy: ${String.format(java.util.Locale.US, "%.1f", summary.accuracy)}%")
+                appendLine("Correct: ${summary.correctCount} | Wrong: ${summary.wrongCount} | Unanswered: ${summary.unansweredCount}")
+                appendLine("Time Taken: ${summary.timeTakenSeconds}s")
+                appendLine("━━━━━━━━━━━━━━━━━━━")
+                appendLine("Shared from Quiz Explore App")
+            }
+
             val sendIntent = Intent().apply {
                 action = Intent.ACTION_SEND
-                putExtra(Intent.EXTRA_TEXT, quiz.jsonContent)
-                putExtra(Intent.EXTRA_TITLE, "${quiz.title}.json")
-                type = "application/json"
+                putExtra(Intent.EXTRA_TEXT, text)
+                putExtra(Intent.EXTRA_SUBJECT, "My Quiz Result: ${summary.quizTitle}")
+                type = "text/plain"
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            val shareIntent = Intent.createChooser(sendIntent, "Share Quiz JSON")
-            context.startActivity(shareIntent)
+            val chooser = Intent.createChooser(sendIntent, "Share Quiz Result").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            _operationState.value = QuizOperationState(errorMessage = "Could not open share: ${e.message}")
         }
+    }
+
+    fun testAiVoice(isBengali: Boolean = false) {
+        val customWords = appSettings.customCongratulationWords.value
+        val lang = appSettings.voiceLanguage.value
+        val phrase = com.example.audio.AIVoiceCongratulationEngine.generateAppreciationPhrase(
+            isCorrect = true,
+            streak = 5,
+            isBengaliQuiz = isBengali,
+            customWords = customWords.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+            languagePref = lang
+        ) ?: if (isBengali) "সাবাশ! তুমি অসাধারণ খেলছো!" else "Outstanding! You are on fire!"
+        soundManager.speakCustomText(phrase, isBengali)
     }
 
     override fun onCleared() {

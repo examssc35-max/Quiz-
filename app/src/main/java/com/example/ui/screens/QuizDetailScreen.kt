@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -84,6 +85,8 @@ fun QuizDetailScreen(
     onToggleFavorite: () -> Unit,
     onEditClick: () -> Unit,
     onExportClick: () -> Unit,
+    onShareTextClick: () -> Unit = {},
+    onCopyJsonClick: () -> Unit = {},
     onAuditQuiz: () -> Unit = {},
     onRevertAudit: () -> Unit = {},
     onCancelAudit: () -> Unit = {},
@@ -92,6 +95,7 @@ fun QuizDetailScreen(
     var selectedMode by remember { mutableStateOf(QuizMode.PRACTICE) }
     var showAuditLogDialog by remember { mutableStateOf(false) }
     var showRevertConfirmDialog by remember { mutableStateOf(false) }
+    var showShareOptionsDialog by remember { mutableStateOf(false) }
 
     val isThisQuizAuditing = auditProgress.isAuditing && auditProgress.quizId == quiz.id
 
@@ -111,7 +115,7 @@ fun QuizDetailScreen(
                         tint = if (quiz.isFavorite) Color(0xFFF43F5E) else Color.White
                     )
                 }
-                IconButton(onClick = onExportClick) {
+                IconButton(onClick = { showShareOptionsDialog = true }) {
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = "Share",
@@ -651,6 +655,109 @@ fun QuizDetailScreen(
             },
             onDismiss = { showRevertConfirmDialog = false }
         )
+    }
+
+    if (showShareOptionsDialog) {
+        Dialog(onDismissRequest = { showShareOptionsDialog = false }) {
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                shape = RoundedCornerShape(26.dp),
+                backgroundColor = Color(0xF20F172A),
+                borderBrush = GlassBorderBrush
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Share Quiz (কুইজ শেয়ার করুন)",
+                        color = TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Choose how you'd like to share '${quiz.title}':",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    GlassPrimaryButton(
+                        text = "Share as JSON File",
+                        onClick = {
+                            showShareOptionsDialog = false
+                            onExportClick()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    GlassSecondaryButton(
+                        text = "Share as Text (WhatsApp/Chat)",
+                        onClick = {
+                            showShareOptionsDialog = false
+                            onShareTextClick()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    GlassSecondaryButton(
+                        text = "Copy JSON to Clipboard",
+                        onClick = {
+                            showShareOptionsDialog = false
+                            onCopyJsonClick()
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                tint = Color(0xFF34D399),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = "Dismiss",
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clickable { showShareOptionsDialog = false }
+                            .padding(8.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

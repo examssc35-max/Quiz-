@@ -37,8 +37,9 @@ fun GlassPrimaryButton(
     enabled: Boolean = true,
     leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
-    gradient: Brush = PrimaryButtonGradient
+    gradient: Brush? = null
 ) {
+    val activeGradient = gradient ?: com.example.ui.theme.LocalAppTheme.current.primaryGradient
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(if (isPressed) 0.96f else 1.0f, label = "button_scale")
@@ -50,7 +51,7 @@ fun GlassPrimaryButton(
             .scale(scale)
             .clip(shape)
             .background(
-                if (enabled) gradient
+                if (enabled) activeGradient
                 else Brush.horizontalGradient(listOf(Color(0x403B82F6), Color(0x302563EB)))
             )
             .clickable(

@@ -24,8 +24,9 @@ fun GlassProgressBar(
     modifier: Modifier = Modifier,
     height: Dp = 6.dp,
     trackColor: Color = Color(0x28FFFFFF),
-    progressBrush: Brush = PrimaryButtonGradient
+    progressBrush: Brush? = null
 ) {
+    val activeBrush = progressBrush ?: com.example.ui.theme.LocalAppTheme.current.primaryGradient
     val animatedProgress by animateFloatAsState(
         targetValue = progress.coerceIn(0f, 1f),
         label = "progress_bar"
@@ -45,7 +46,7 @@ fun GlassProgressBar(
                 .fillMaxHeight()
                 .fillMaxWidth(animatedProgress)
                 .clip(shape)
-                .background(progressBrush)
+                .background(activeBrush)
         )
     }
 }
