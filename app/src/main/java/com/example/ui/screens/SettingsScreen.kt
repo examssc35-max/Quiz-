@@ -470,7 +470,12 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Medium
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         listOf("auto" to "Auto (স্বয়ংক্রিয়)", "bn" to "বাংলা (Bengali)", "en" to "English").forEach { (code, label) ->
                             GlassFilterChip(
                                 label = label,
@@ -490,7 +495,12 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Medium
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         listOf(
                             "unlimited_ai" to "Unlimited Words (আনলিমিটেড শব্দ)",
                             "custom_words" to "Custom Words (কাস্টম শব্দ)",
@@ -608,7 +618,12 @@ fun SettingsScreen(
                     fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     listOf("Subtle", "Medium", "High").forEach { level ->
                         GlassFilterChip(
                             label = level,

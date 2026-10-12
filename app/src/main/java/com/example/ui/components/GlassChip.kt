@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -39,15 +40,22 @@ fun GlassFilterChip(
                 if (isSelected) Color.White
                 else GlassCardSurface
             )
+            .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) Color.White else Color(0x35FFFFFF),
+                shape = shape
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 9.dp),
+            .padding(horizontal = 16.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
             color = if (isSelected) Color(0xFF0F172A) else Color(0xCCFFFFFF),
-            fontSize = 14.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+            fontSize = 13.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false
         )
     }
 }

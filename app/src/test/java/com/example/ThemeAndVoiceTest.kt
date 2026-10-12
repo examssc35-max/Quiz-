@@ -158,4 +158,14 @@ class ThemeAndVoiceTest {
             assertNotNull(color)
         }
     }
+
+    @Test
+    fun testGlassmorphicModifierPresets() {
+        val intensities = com.example.ui.components.GlassIntensity.values()
+        assertEquals(4, intensities.size)
+        assertTrue(intensities.contains(com.example.ui.components.GlassIntensity.SUBTLE))
+        assertTrue(intensities.contains(com.example.ui.components.GlassIntensity.REGULAR))
+        assertTrue(intensities.contains(com.example.ui.components.GlassIntensity.ELEVATED))
+        assertTrue(intensities.contains(com.example.ui.components.GlassIntensity.ACCENT))
+    }
 }
