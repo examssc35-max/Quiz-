@@ -87,6 +87,8 @@ import com.example.ui.theme.WrongRedBg
 import com.example.ui.components.CelebrationOverlay
 import com.example.ui.components.ActiveCelebration
 import com.example.ui.components.CelebrationType
+import com.example.audio.AIVoiceCongratulationEngine
+import kotlin.random.Random
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -115,9 +117,11 @@ fun QuizPlayScreen(
     // Recomposition trigger on answer update
     var answersVersion by remember { mutableIntStateOf(0) }
 
-    // User Constraint 2: Don't congratulate on every question. Congratulate after 3 correct answers; console after 2-3 wrong answers.
+    // User Constraint 1: Dynamic/random streak milestone (not always fixed 3)
     var consecutiveCorrectAnswers by remember { mutableIntStateOf(0) }
     var consecutiveWrongAnswers by remember { mutableIntStateOf(0) }
+    var nextCelebrationThreshold by remember { mutableIntStateOf(Random.nextInt(2, 4)) }
+    var nextConsolationThreshold by remember { mutableIntStateOf(Random.nextInt(2, 4)) }
 
     // User Constraint 4: Dynamic celebratory animations (fireworks, confetti, shooting stars, golden rings, balloons, consolation glow)
     var activeCelebration by remember { mutableStateOf<ActiveCelebration?>(null) }
@@ -163,13 +167,19 @@ fun QuizPlayScreen(
         }
     }
 
-    // User Constraint 2 & 4: Congratulate only after 2-3 questions (e.g. 3 correct or 2-3 wrong) with distinct animations
+    // User Constraint 1 & 2: Congratulate with randomized intervals (not always fixed 3), animation runs even if voice is off, with realistic sound effects
     val handleAnswerPraiseOrConsolation: (Boolean) -> Unit = { isCorrect ->
         if (isCorrect) {
             consecutiveCorrectAnswers++
             consecutiveWrongAnswers = 0
-            // Rule 2: Congratulate after 3 correct answers (3, 6, 9...)
-            if (consecutiveCorrectAnswers >= 3 && consecutiveCorrectAnswers % 3 == 0) {
+
+            // User Constraint: Not always strictly 3 correct answers; use randomness!
+            // 1) Reached randomized milestone (e.g. 2 or 3 correct answers)
+            // 2) OR spontaneous surprise celebration (28% chance after any correct answer)
+            val reachedMilestone = consecutiveCorrectAnswers >= nextCelebrationThreshold
+            val surpriseCelebration = (consecutiveCorrectAnswers >= 1 && Random.nextFloat() < 0.28f)
+
+            if (reachedMilestone || surpriseCelebration) {
                 val celebrationTypes = listOf(
                     CelebrationType.FIREWORKS,
                     CelebrationType.CONFETTI_RAIN,
@@ -179,43 +189,79 @@ fun QuizPlayScreen(
                 )
                 val randomType = celebrationTypes.random()
 
-                val result = soundManager.speakStreakCongratulation(
-                    streak = consecutiveCorrectAnswers,
-                    voiceEnabled = voiceEnabled,
+                // Generate short praise text & display title
+                val customWords = AIVoiceCongratulationEngine.parseCustomWords(customCongratulationWords)
+                val (spokenText, displayTitle) = AIVoiceCongratulationEngine.generateShortStreakCongratulation(
+                    streak = maxOf(consecutiveCorrectAnswers, 2),
                     isBengaliQuiz = isBengali,
-                    customWordsString = customCongratulationWords,
+                    customWords = customWords,
                     languagePref = voiceLanguage
                 )
 
+                // 1. Realistic celebratory sound effect (ALWAYS plays when soundEnabled is true, even if voice is OFF)
+                soundManager.playCelebrationSound(randomType, soundEnabled)
+
+                // 2. Speak voice ONLY if AI voice is enabled (if off, voice is silent but animation & sound still occur!)
+                if (voiceEnabled) {
+                    soundManager.speakStreakCongratulation(
+                        streak = consecutiveCorrectAnswers,
+                        voiceEnabled = true,
+                        isBengaliQuiz = isBengali,
+                        customWordsString = customCongratulationWords,
+                        languagePref = voiceLanguage
+                    )
+                }
+
+                // 3. Animation ALWAYS triggers regardless of whether voice is enabled or disabled
                 activeCelebration = ActiveCelebration(
                     id = System.currentTimeMillis(),
                     type = randomType,
-                    title = result.second,
-                    isConsolation = false
+                    title = displayTitle,
+                    isConsolation = false,
+                    durationMs = 3200L
                 )
+
+                // Randomize next celebration milestone (e.g. after +2 or +3 more correct answers)
+                nextCelebrationThreshold = consecutiveCorrectAnswers + Random.nextInt(2, 4)
             }
         } else {
             consecutiveWrongAnswers++
             consecutiveCorrectAnswers = 0
-            // Rule 2: Console after 2-3 wrong answers
-            if (consecutiveWrongAnswers in 2..3) {
-                val result = soundManager.speakConsolation(
+            // Reset next celebration milestone for next streak run
+            nextCelebrationThreshold = Random.nextInt(2, 4)
+
+            // Consolation after randomized threshold (2 or 3 wrong answers)
+            if (consecutiveWrongAnswers >= nextConsolationThreshold) {
+                val (_, displayTitle) = AIVoiceCongratulationEngine.generateShortConsolation(
                     wrongCount = consecutiveWrongAnswers,
-                    voiceEnabled = voiceEnabled,
                     isBengaliQuiz = isBengali,
                     languagePref = voiceLanguage
                 )
 
+                // 1. Consolation sound chime if sound enabled (even if voice is OFF)
+                soundManager.playCelebrationSound(CelebrationType.CONSOLATION_GLOW, soundEnabled)
+
+                // 2. Speak consolation ONLY if AI voice is enabled
+                if (voiceEnabled) {
+                    soundManager.speakConsolation(
+                        wrongCount = consecutiveWrongAnswers,
+                        voiceEnabled = true,
+                        isBengaliQuiz = isBengali,
+                        languagePref = voiceLanguage
+                    )
+                }
+
+                // 3. Animation ALWAYS triggers regardless of voice
                 activeCelebration = ActiveCelebration(
                     id = System.currentTimeMillis(),
                     type = CelebrationType.CONSOLATION_GLOW,
-                    title = result.second,
-                    isConsolation = true
+                    title = displayTitle,
+                    isConsolation = true,
+                    durationMs = 2800L
                 )
 
-                if (consecutiveWrongAnswers >= 3) {
-                    consecutiveWrongAnswers = 0
-                }
+                consecutiveWrongAnswers = 0
+                nextConsolationThreshold = Random.nextInt(2, 4)
             }
         }
     }

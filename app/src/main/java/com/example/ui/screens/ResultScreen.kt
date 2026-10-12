@@ -81,6 +81,8 @@ import com.example.ui.theme.WrongRedBorder
 fun ResultScreen(
     summary: QuizResultSummary,
     aiManager: AIManager? = null,
+    soundManager: com.example.audio.AppSoundManager? = null,
+    soundEnabled: Boolean = true,
     voiceEnabled: Boolean = true,
     onHearVoiceCongratulations: (() -> Unit)? = null,
     onShareResultClick: (() -> Unit)? = null,
@@ -108,8 +110,11 @@ fun ResultScreen(
         )
     }
 
-    // Automatically trigger voice congratulations celebration when result screen is shown
+    // Automatically trigger realistic celebration sound and voice congratulations
     LaunchedEffect(Unit) {
+        if (activeCelebration != null && soundEnabled) {
+            soundManager?.playCelebrationSound(activeCelebration!!.type, soundEnabled)
+        }
         if (voiceEnabled) {
             onHearVoiceCongratulations?.invoke()
         }
@@ -162,6 +167,7 @@ fun ResultScreen(
                                 title = "🎉 চমৎকার! অভিনন্দন!",
                                 isConsolation = false
                             )
+                            soundManager?.playCelebrationSound(CelebrationType.FIREWORKS, soundEnabled)
                             onHearVoiceCongratulations()
                         }
                         .padding(horizontal = 16.dp, vertical = 8.dp),

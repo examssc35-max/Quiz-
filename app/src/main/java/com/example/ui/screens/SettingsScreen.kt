@@ -94,6 +94,7 @@ fun SettingsScreen(
     onClearUnfinished: () -> Unit,
     onNavigateToAiSettings: () -> Unit = {},
     onTestVoice: (isBengali: Boolean) -> Unit = {},
+    onTestCelebrationSound: ((CelebrationType) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showResetStatsDialog by remember { mutableStateOf(false) }
@@ -531,7 +532,7 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
-                        text = "৩টি সঠিক উত্তরে এই শব্দ দিয়ে প্রশংসা করবে এবং ২-৩টি ভুল উত্তরে সান্ত্বনা দিবে।",
+                        text = "সঠিক উত্তরে (র‍্যান্ডম বা ধারাবাহিক) এই শব্দ দিয়ে প্রশংসা করবে এবং ২-৩টি ভুল উত্তরে সান্ত্বনা দিবে। ভয়েস বন্ধ থাকলেও অ্যানিমেশন ও সাউন্ড সক্রিয় থাকবে।",
                         color = activeTheme.primary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium
@@ -688,9 +689,11 @@ fun SettingsScreen(
                             testCelebration = ActiveCelebration(
                                 id = System.currentTimeMillis(),
                                 type = randomAnim,
-                                title = "🎉 $word! ৩টি সঠিক উত্তর!",
-                                isConsolation = false
+                                title = "🎉 $word! চমৎকার উত্তর!",
+                                isConsolation = false,
+                                durationMs = 3200L
                             )
+                            onTestCelebrationSound?.invoke(randomAnim)
                             val isBn = voiceLanguage == "bn" || voiceLanguage == "auto"
                             onTestVoice(isBn)
                         }

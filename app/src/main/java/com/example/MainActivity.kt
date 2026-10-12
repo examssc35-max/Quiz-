@@ -364,7 +364,8 @@ fun QuizAppRoot(viewModel: QuizAppViewModel) {
                         onRestoreDefaultQuizzes = { viewModel.restoreSampleQuizzes() },
                         onClearUnfinished = { viewModel.clearUnfinished() },
                         onNavigateToAiSettings = { viewModel.navigateTo(Screen.AiSettings) },
-                        onTestVoice = { isBn -> viewModel.testAiVoice(isBn) }
+                        onTestVoice = { isBn -> viewModel.testAiVoice(isBn) },
+                        onTestCelebrationSound = { type -> viewModel.soundManager.playCelebrationSound(type, soundEnabled = true) }
                     )
                 }
                 is Screen.AiSettings -> {

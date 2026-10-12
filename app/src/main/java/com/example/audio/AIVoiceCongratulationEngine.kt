@@ -105,11 +105,11 @@ object AIVoiceCongratulationEngine {
         val displayTitle: String
 
         if (useBengali) {
-            spokenText = "$cleanPraise! $streak টি সঠিক উত্তর!"
-            displayTitle = "🎉 $cleanPraise! $streak টি সঠিক উত্তর!"
+            spokenText = if (streak > 1) "$cleanPraise! $streak টি সঠিক উত্তর!" else "$cleanPraise! দারুণ সঠিক উত্তর!"
+            displayTitle = if (streak > 1) "🎉 $cleanPraise! $streak টি সঠিক উত্তর!" else "🎉 $cleanPraise!"
         } else {
-            spokenText = "$cleanPraise! $streak in a row!"
-            displayTitle = "🎉 $cleanPraise! $streak in a row!"
+            spokenText = if (streak > 1) "$cleanPraise! $streak in a row!" else "$cleanPraise! Great answer!"
+            displayTitle = if (streak > 1) "🎉 $cleanPraise! $streak in a row!" else "🎉 $cleanPraise!"
         }
 
         return Pair(spokenText, displayTitle)
