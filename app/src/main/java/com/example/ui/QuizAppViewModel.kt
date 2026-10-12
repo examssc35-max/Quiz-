@@ -442,16 +442,16 @@ class QuizAppViewModel(
     }
 
     fun testAiVoice(isBengali: Boolean = false) {
-        val customWords = appSettings.customCongratulationWords.value
+        val customWordsStr = appSettings.customCongratulationWords.value
+        val customWords = com.example.audio.AIVoiceCongratulationEngine.parseCustomWords(customWordsStr)
         val lang = appSettings.voiceLanguage.value
-        val phrase = com.example.audio.AIVoiceCongratulationEngine.generateAppreciationPhrase(
-            isCorrect = true,
-            streak = 5,
+        val (spoken, _) = com.example.audio.AIVoiceCongratulationEngine.generateShortStreakCongratulation(
+            streak = 3,
             isBengaliQuiz = isBengali,
-            customWords = customWords.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+            customWords = customWords,
             languagePref = lang
-        ) ?: if (isBengali) "সাবাশ! তুমি অসাধারণ খেলছো!" else "Outstanding! You are on fire!"
-        soundManager.speakCustomText(phrase, isBengali)
+        )
+        soundManager.speakCustomText(spoken, isBengali)
     }
 
     override fun onCleared() {

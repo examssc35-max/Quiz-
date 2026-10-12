@@ -58,6 +58,9 @@ import androidx.compose.ui.unit.sp
 import com.example.ai.AIManager
 import com.example.ai.AiResultAnalysis
 import com.example.data.model.QuizResultSummary
+import com.example.ui.components.CelebrationOverlay
+import com.example.ui.components.ActiveCelebration
+import com.example.ui.components.CelebrationType
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassPrimaryButton
 import com.example.ui.components.GlassScoreGauge
@@ -86,6 +89,25 @@ fun ResultScreen(
     onBackHomeClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var activeCelebration by remember {
+        mutableStateOf(
+            if (summary.accuracy >= 50f) {
+                ActiveCelebration(
+                    id = System.currentTimeMillis(),
+                    type = listOf(
+                        CelebrationType.FIREWORKS,
+                        CelebrationType.CONFETTI_RAIN,
+                        CelebrationType.SHOOTING_STARS,
+                        CelebrationType.GOLDEN_RINGS,
+                        CelebrationType.BALLOONS_FLOAT
+                    ).random(),
+                    title = "🎉 অভিনন্দন! ${summary.accuracy.toInt()}% স্কোর!",
+                    isConsolation = false
+                )
+            } else null
+        )
+    }
+
     // Automatically trigger voice congratulations celebration when result screen is shown
     LaunchedEffect(Unit) {
         if (voiceEnabled) {
@@ -106,37 +128,46 @@ fun ResultScreen(
         else -> "Quiz Completed!"
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Spacer(modifier = Modifier.height(28.dp))
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(28.dp))
 
-        // Title with celebratory confetti feel
-        Text(
-            text = title,
-            color = TextPrimary,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold
-        )
+            // Title with celebratory confetti feel
+            Text(
+                text = title,
+                color = TextPrimary,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold
+            )
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        // AI Voice Congratulation Celebration Banner (Unlimited Words)
-        if (onHearVoiceCongratulations != null) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0x3506B6D4))
-                    .border(1.dp, Color(0x6006B6D4), RoundedCornerShape(16.dp))
-                    .clickable { onHearVoiceCongratulations() }
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
+            // AI Voice Congratulation Celebration Banner (Unlimited Words)
+            if (onHearVoiceCongratulations != null) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0x3506B6D4))
+                        .border(1.dp, Color(0x6006B6D4), RoundedCornerShape(16.dp))
+                        .clickable {
+                            activeCelebration = ActiveCelebration(
+                                id = System.currentTimeMillis(),
+                                type = CelebrationType.FIREWORKS,
+                                title = "🎉 চমৎকার! অভিনন্দন!",
+                                isConsolation = false
+                            )
+                            onHearVoiceCongratulations()
+                        }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
                 Icon(
                     imageVector = Icons.Default.VolumeUp,
                     contentDescription = "Voice Celebration",
@@ -297,6 +328,12 @@ fun ResultScreen(
         }
 
         Spacer(modifier = Modifier.height(40.dp))
+        }
+
+        CelebrationOverlay(
+            celebration = activeCelebration,
+            onDismiss = { activeCelebration = null }
+        )
     }
 }
 

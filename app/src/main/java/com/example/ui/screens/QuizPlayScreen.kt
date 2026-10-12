@@ -84,6 +84,9 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WrongRed
 import com.example.ui.theme.WrongRedBg
+import com.example.ui.components.CelebrationOverlay
+import com.example.ui.components.ActiveCelebration
+import com.example.ui.components.CelebrationType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -111,6 +114,13 @@ fun QuizPlayScreen(
 
     // Recomposition trigger on answer update
     var answersVersion by remember { mutableIntStateOf(0) }
+
+    // User Constraint 2: Don't congratulate on every question. Congratulate after 3 correct answers; console after 2-3 wrong answers.
+    var consecutiveCorrectAnswers by remember { mutableIntStateOf(0) }
+    var consecutiveWrongAnswers by remember { mutableIntStateOf(0) }
+
+    // User Constraint 4: Dynamic celebratory animations (fireworks, confetti, shooting stars, golden rings, balloons, consolation glow)
+    var activeCelebration by remember { mutableStateOf<ActiveCelebration?>(null) }
 
     val hasTimer = engine.quizSchema.timeLimit > 0
     val isBengali = remember(engine.quizSchema) {
@@ -148,6 +158,63 @@ fun QuizPlayScreen(
                     soundManager.playWrongSound(soundEnabled)
                     performExamSubmission()
                     break
+                }
+            }
+        }
+    }
+
+    // User Constraint 2 & 4: Congratulate only after 2-3 questions (e.g. 3 correct or 2-3 wrong) with distinct animations
+    val handleAnswerPraiseOrConsolation: (Boolean) -> Unit = { isCorrect ->
+        if (isCorrect) {
+            consecutiveCorrectAnswers++
+            consecutiveWrongAnswers = 0
+            // Rule 2: Congratulate after 3 correct answers (3, 6, 9...)
+            if (consecutiveCorrectAnswers >= 3 && consecutiveCorrectAnswers % 3 == 0) {
+                val celebrationTypes = listOf(
+                    CelebrationType.FIREWORKS,
+                    CelebrationType.CONFETTI_RAIN,
+                    CelebrationType.SHOOTING_STARS,
+                    CelebrationType.GOLDEN_RINGS,
+                    CelebrationType.BALLOONS_FLOAT
+                )
+                val randomType = celebrationTypes.random()
+
+                val result = soundManager.speakStreakCongratulation(
+                    streak = consecutiveCorrectAnswers,
+                    voiceEnabled = voiceEnabled,
+                    isBengaliQuiz = isBengali,
+                    customWordsString = customCongratulationWords,
+                    languagePref = voiceLanguage
+                )
+
+                activeCelebration = ActiveCelebration(
+                    id = System.currentTimeMillis(),
+                    type = randomType,
+                    title = result.second,
+                    isConsolation = false
+                )
+            }
+        } else {
+            consecutiveWrongAnswers++
+            consecutiveCorrectAnswers = 0
+            // Rule 2: Console after 2-3 wrong answers
+            if (consecutiveWrongAnswers in 2..3) {
+                val result = soundManager.speakConsolation(
+                    wrongCount = consecutiveWrongAnswers,
+                    voiceEnabled = voiceEnabled,
+                    isBengaliQuiz = isBengali,
+                    languagePref = voiceLanguage
+                )
+
+                activeCelebration = ActiveCelebration(
+                    id = System.currentTimeMillis(),
+                    type = CelebrationType.CONSOLATION_GLOW,
+                    title = result.second,
+                    isConsolation = true
+                )
+
+                if (consecutiveWrongAnswers >= 3) {
+                    consecutiveWrongAnswers = 0
                 }
             }
         }
@@ -335,30 +402,16 @@ fun QuizPlayScreen(
                                         val feedback = engine.submitPracticeFillBlankAnswer(typedAnswer)
                                         if (feedback != null) {
                                             answersVersion++
-                                            if (feedback.isAnswerNotSet) {
+                                             if (feedback.isAnswerNotSet) {
                                                 soundManager.playClickSound(soundEnabled)
                                             } else if (feedback.isCorrect) {
                                                 soundManager.playCorrectSound(soundEnabled)
                                                 soundManager.vibrate(vibrationEnabled, isSuccess = true)
-                                                soundManager.speakAppreciation(
-                                                    isCorrect = true,
-                                                    streak = feedback.streak,
-                                                    voiceEnabled = voiceEnabled,
-                                                    isBengaliQuiz = isBengali,
-                                                    customWordsString = customCongratulationWords,
-                                                    languagePref = voiceLanguage
-                                                )
+                                                handleAnswerPraiseOrConsolation(true)
                                             } else {
                                                 soundManager.playWrongSound(soundEnabled)
                                                 soundManager.vibrate(vibrationEnabled, isSuccess = false)
-                                                soundManager.speakAppreciation(
-                                                    isCorrect = false,
-                                                    streak = feedback.streak,
-                                                    voiceEnabled = voiceEnabled,
-                                                    isBengaliQuiz = isBengali,
-                                                    customWordsString = customCongratulationWords,
-                                                    languagePref = voiceLanguage
-                                                )
+                                                handleAnswerPraiseOrConsolation(false)
                                             }
                                         }
                                     }
@@ -410,18 +463,12 @@ fun QuizPlayScreen(
                                         if (feedback.isCorrect) {
                                             soundManager.playCorrectSound(soundEnabled)
                                             soundManager.vibrate(vibrationEnabled, isSuccess = true)
+                                            handleAnswerPraiseOrConsolation(true)
                                         } else {
                                             soundManager.playWrongSound(soundEnabled)
                                             soundManager.vibrate(vibrationEnabled, isSuccess = false)
+                                            handleAnswerPraiseOrConsolation(false)
                                         }
-                                        soundManager.speakAppreciation(
-                                            isCorrect = feedback.isCorrect,
-                                            streak = feedback.streak,
-                                            voiceEnabled = voiceEnabled,
-                                            isBengaliQuiz = isBengali,
-                                            customWordsString = customCongratulationWords,
-                                            languagePref = voiceLanguage
-                                        )
                                     } else if (engine.mode == QuizMode.EXAM) {
                                         soundManager.playClickSound(soundEnabled)
                                     }
@@ -798,5 +845,11 @@ fun QuizPlayScreen(
                 onDismiss = { showExitConfirmDialog = false }
             )
         }
+
+        // Celebratory Fullscreen Animations (Fireworks, Confetti, Stars, Rings, Balloons, Consolation Glow)
+        CelebrationOverlay(
+            celebration = activeCelebration,
+            onDismiss = { activeCelebration = null }
+        )
     }
 }

@@ -109,6 +109,70 @@ class AppSoundManager(private val context: Context) {
      * Respects cooldown, avoids repeat, works offline via Android TextToSpeech.
      * Leverages AIVoiceCongratulationEngine for unlimited words.
      */
+    /**
+     * Speaks short, punchy congratulation when a streak milestone (e.g. 3 correct) is reached.
+     * Returns Pair(spokenText, displayTitle).
+     */
+    fun speakStreakCongratulation(
+        streak: Int,
+        voiceEnabled: Boolean,
+        isBengaliQuiz: Boolean = false,
+        customWordsString: String = "",
+        languagePref: String = "auto"
+    ): Pair<String, String> {
+        val customWords = AIVoiceCongratulationEngine.parseCustomWords(customWordsString)
+        val (spoken, displayTitle) = AIVoiceCongratulationEngine.generateShortStreakCongratulation(
+            streak = streak,
+            isBengaliQuiz = isBengaliQuiz,
+            customWords = customWords,
+            languagePref = languagePref
+        )
+
+        if (voiceEnabled && isTtsInitialized) {
+            val now = System.currentTimeMillis()
+            lastSpeechTimeMs = now
+            val useBengali = when (languagePref) {
+                "bn" -> true
+                "en" -> false
+                else -> isBengaliQuiz || spoken.any { it in '\u0980'..'\u09FF' }
+            }
+            speakInternal(spoken, useBengali, "streak_$now")
+        }
+        return Pair(spoken, displayTitle)
+    }
+
+    /**
+     * Speaks short consolation when 2-3 wrong answers occur.
+     * Returns Pair(spokenText, displayTitle).
+     */
+    fun speakConsolation(
+        wrongCount: Int,
+        voiceEnabled: Boolean,
+        isBengaliQuiz: Boolean = false,
+        languagePref: String = "auto"
+    ): Pair<String, String> {
+        val (spoken, displayTitle) = AIVoiceCongratulationEngine.generateShortConsolation(
+            wrongCount = wrongCount,
+            isBengaliQuiz = isBengaliQuiz,
+            languagePref = languagePref
+        )
+
+        if (voiceEnabled && isTtsInitialized) {
+            val now = System.currentTimeMillis()
+            lastSpeechTimeMs = now
+            val useBengali = when (languagePref) {
+                "bn" -> true
+                "en" -> false
+                else -> isBengaliQuiz || spoken.any { it in '\u0980'..'\u09FF' }
+            }
+            speakInternal(spoken, useBengali, "consolation_$now")
+        }
+        return Pair(spoken, displayTitle)
+    }
+
+    /**
+     * Legacy appreciation method for backward compatibility.
+     */
     fun speakAppreciation(
         isCorrect: Boolean,
         streak: Int,
@@ -117,38 +181,17 @@ class AppSoundManager(private val context: Context) {
         customWordsString: String = "",
         languagePref: String = "auto"
     ) {
-        if (!voiceEnabled || !isTtsInitialized) return
-
-        val now = System.currentTimeMillis()
-        // Minimum 2.2 second cooldown between voice cheers
-        if (now - lastSpeechTimeMs < 2200L) return
-
-        val customWords = customWordsString
-            .split(",")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-        val phrase = AIVoiceCongratulationEngine.generateAppreciationPhrase(
-            isCorrect = isCorrect,
-            streak = streak,
-            isBengaliQuiz = isBengaliQuiz,
-            customWords = customWords,
-            languagePref = languagePref
-        )
-
-        if (!phrase.isNullOrBlank()) {
-            lastSpeechTimeMs = now
-            val useBengali = when (languagePref) {
-                "bn" -> true
-                "en" -> false
-                else -> isBengaliQuiz || phrase.any { it in '\u0980'..'\u09FF' }
+        if (isCorrect) {
+            if (streak >= 3) {
+                speakStreakCongratulation(streak, voiceEnabled, isBengaliQuiz, customWordsString, languagePref)
             }
-            speakInternal(phrase, useBengali, "appreciation_$now")
+        } else {
+            speakConsolation(2, voiceEnabled, isBengaliQuiz, languagePref)
         }
     }
 
     /**
-     * Speaks dynamic unlimited congratulations upon Quiz Completion / Result screen.
+     * Speaks dynamic short congratulations upon Quiz Completion / Result screen.
      */
     fun speakResultCongratulations(
         summary: com.example.data.model.QuizResultSummary,
@@ -159,10 +202,7 @@ class AppSoundManager(private val context: Context) {
     ) {
         if (!voiceEnabled || !isTtsInitialized) return
 
-        val customWords = customWordsString
-            .split(",")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
+        val customWords = AIVoiceCongratulationEngine.parseCustomWords(customWordsString)
 
         val phrase = AIVoiceCongratulationEngine.generateQuizCompletionCongratulations(
             summary = summary,

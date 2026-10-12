@@ -52,6 +52,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.AppSettings
+import com.example.audio.AIVoiceCongratulationEngine
+import com.example.ui.components.CelebrationOverlay
+import com.example.ui.components.ActiveCelebration
+import com.example.ui.components.CelebrationType
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassConfirmDialog
 import com.example.ui.components.GlassFilterChip
@@ -98,16 +102,18 @@ fun SettingsScreen(
     var primaryHexInput by remember(customPrimaryHex) { mutableStateOf(customPrimaryHex) }
     var secondaryHexInput by remember(customSecondaryHex) { mutableStateOf(customSecondaryHex) }
     var customWordsInput by remember(customCongratulationWords) { mutableStateOf(customCongratulationWords) }
+    var testCelebration by remember { mutableStateOf<ActiveCelebration?>(null) }
 
     val activeTheme = LocalAppTheme.current
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
         Spacer(modifier = Modifier.height(8.dp))
 
         // Title
@@ -515,19 +521,20 @@ fun SettingsScreen(
                     }
                 }
 
-                // Custom Congratulation Words Input
+                // Custom Congratulation Words Input (Requirement 1, 2, 3)
                 Column(modifier = Modifier.padding(top = 4.dp)) {
                     Text(
-                        text = "Custom Congratulation Words (কাস্টম কংগ্রেচুলেশন শব্দাবলী):",
+                        text = "Custom Congratulation Words (কাস্টম শব্দাবলী):",
                         color = TextSecondary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
-                        text = "Enter your favorite praise words separated by commas:",
-                        color = TextMuted,
-                        fontSize = 11.sp
+                        text = "৩টি সঠিক উত্তরে এই শব্দ দিয়ে প্রশংসা করবে এবং ২-৩টি ভুল উত্তরে সান্ত্বনা দিবে।",
+                        color = activeTheme.primary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
                     )
                     Spacer(modifier = Modifier.height(6.dp))
 
@@ -550,6 +557,85 @@ fun SettingsScreen(
                         singleLine = false,
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Quick Add Praise Chips
+                    Text(
+                        text = "Quick Add (শব্দ যোগ করতে ট্যাপ করুন):",
+                        color = TextMuted,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("সাবাশ", "মারহাবা", "দারুণ", "অসাধারণ", "Bravo", "Genius", "Awesome", "Superb").forEach { suggestion ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x20FFFFFF))
+                                    .border(1.dp, Color(0x30FFFFFF), RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        val existing = customWordsInput.trim()
+                                        val updated = if (existing.isEmpty()) suggestion else "$existing, $suggestion"
+                                        customWordsInput = updated
+                                        appSettings.setCustomCongratulationWords(updated)
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(text = "+ $suggestion", color = Color.White, fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    // Parsed Active Words Preview (Clickable to verify voice)
+                    val parsedWords = remember(customWordsInput) {
+                        AIVoiceCongratulationEngine.parseCustomWords(customWordsInput)
+                    }
+                    if (parsedWords.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Active Custom Words (${parsedWords.size} words active - ট্যাপ করে শুনুন):",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            parsedWords.forEach { word ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(activeTheme.primary.copy(alpha = 0.25f))
+                                        .border(1.dp, activeTheme.primary.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            val isBn = word.any { it in '\u0980'..'\u09FF' }
+                                            onTestVoice(isBn)
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(text = word, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.VolumeUp,
+                                            contentDescription = "Hear",
+                                            tint = activeTheme.primary,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Test Voice Button
@@ -576,6 +662,51 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "🔊 Test AI Voice Congratulations (ভয়েস পরীক্ষা করুন)",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Test Fireworks & Celebration Animations Button (Requirement 4)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Brush.horizontalGradient(listOf(Color(0xFF8B5CF6).copy(alpha = 0.35f), Color(0xFFEC4899).copy(alpha = 0.35f))))
+                        .border(1.dp, Color(0xFFD946EF), RoundedCornerShape(14.dp))
+                        .clickable {
+                            val randomAnim = listOf(
+                                CelebrationType.FIREWORKS,
+                                CelebrationType.CONFETTI_RAIN,
+                                CelebrationType.SHOOTING_STARS,
+                                CelebrationType.GOLDEN_RINGS,
+                                CelebrationType.BALLOONS_FLOAT
+                            ).random()
+                            val words = AIVoiceCongratulationEngine.parseCustomWords(customWordsInput)
+                            val word = words.randomOrNull() ?: "সাবাশ"
+                            testCelebration = ActiveCelebration(
+                                id = System.currentTimeMillis(),
+                                type = randomAnim,
+                                title = "🎉 $word! ৩টি সঠিক উত্তর!",
+                                isConsolation = false
+                            )
+                            val isBn = voiceLanguage == "bn" || voiceLanguage == "auto"
+                            onTestVoice(isBn)
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "Test Fireworks",
+                        tint = Color(0xFFF472B6),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "🎆 Test Fireworks & Animations (আতশবাজি পরীক্ষা করুন)",
                         color = Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
@@ -712,6 +843,12 @@ fun SettingsScreen(
             },
             onDismiss = { showRestoreQuizzesDialog = false }
         )
+    }
+
+    CelebrationOverlay(
+        celebration = testCelebration,
+        onDismiss = { testCelebration = null }
+    )
     }
 }
 
