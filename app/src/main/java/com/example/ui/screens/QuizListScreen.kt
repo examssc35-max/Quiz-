@@ -33,7 +33,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
@@ -329,7 +329,7 @@ fun QuizListItemCard(
         "science" -> Icons.Default.Science to Color(0xFF10B981)
         "mathematics", "math" -> Icons.Default.Calculate to Color(0xFF8B5CF6)
         "ict", "technology" -> Icons.Default.Computer to Color(0xFF06B6D4)
-        "english" -> Icons.Default.MenuBook to Color(0xFFA855F7)
+        "english" -> Icons.AutoMirrored.Filled.MenuBook to Color(0xFFA855F7)
         else -> Icons.Default.Public to Color(0xFF3B82F6)
     }
 

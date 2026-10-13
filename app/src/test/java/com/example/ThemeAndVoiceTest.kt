@@ -21,7 +21,7 @@ class ThemeAndVoiceTest {
 
     @Test
     fun testAllThemePresetsGenerateValidPalettes() {
-        ThemePreset.values().forEach { preset ->
+        ThemePreset.entries.forEach { preset ->
             val palette = preset.palette
             assertNotNull(palette)
             assertNotNull(palette.primary)
@@ -72,7 +72,7 @@ class ThemeAndVoiceTest {
         )
 
         assertNotNull(phraseStreak5)
-        assertTrue(phraseStreak5!!.isNotBlank())
+        assertTrue(phraseStreak5.isNotBlank())
         // Should contain Bengali characters
         assertTrue(phraseStreak5.any { it in '\u0980'..'\u09FF' })
 
@@ -117,7 +117,7 @@ class ThemeAndVoiceTest {
         )
 
         assertNotNull(phrase)
-        assertTrue(phrase!!.isNotBlank())
+        assertTrue(phrase.isNotBlank())
 
         val summary = QuizResultSummary(
             quizId = "q2",
@@ -161,7 +161,7 @@ class ThemeAndVoiceTest {
 
     @Test
     fun testGlassmorphicModifierPresets() {
-        val intensities = com.example.ui.components.GlassIntensity.values()
+        val intensities = com.example.ui.components.GlassIntensity.entries
         assertEquals(4, intensities.size)
         assertTrue(intensities.contains(com.example.ui.components.GlassIntensity.SUBTLE))
         assertTrue(intensities.contains(com.example.ui.components.GlassIntensity.REGULAR))

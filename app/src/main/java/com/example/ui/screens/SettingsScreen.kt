@@ -30,7 +30,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -627,7 +627,7 @@ fun SettingsScreen(
                                         Text(text = word, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Icon(
-                                            imageVector = Icons.Default.VolumeUp,
+                                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
                                             contentDescription = "Hear",
                                             tint = activeTheme.primary,
                                             modifier = Modifier.size(12.dp)
@@ -655,7 +655,7 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.VolumeUp,
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
                         contentDescription = "Test Voice",
                         tint = activeTheme.primary,
                         modifier = Modifier.size(20.dp)
@@ -718,7 +718,7 @@ fun SettingsScreen(
             }
 
             SettingsSwitchRow(
-                icon = Icons.Default.VolumeUp,
+                icon = Icons.AutoMirrored.Filled.VolumeUp,
                 title = "Sound Effects",
                 subtitle = "Chimes for correct & wrong answers",
                 checked = soundEnabled,

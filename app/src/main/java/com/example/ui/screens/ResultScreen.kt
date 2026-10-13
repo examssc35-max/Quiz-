@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -34,7 +35,6 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -92,7 +92,7 @@ fun ResultScreen(
     modifier: Modifier = Modifier
 ) {
     var activeCelebration by remember {
-        mutableStateOf(
+        mutableStateOf<ActiveCelebration?>(
             if (summary.accuracy >= 50f) {
                 ActiveCelebration(
                     id = System.currentTimeMillis(),
@@ -106,7 +106,14 @@ fun ResultScreen(
                     title = "🎉 অভিনন্দন! ${summary.accuracy.toInt()}% স্কোর!",
                     isConsolation = false
                 )
-            } else null
+            } else {
+                ActiveCelebration(
+                    id = System.currentTimeMillis(),
+                    type = CelebrationType.CONSOLATION_GLOW,
+                    title = "💙 দারুণ চেষ্টা! আবার চেষ্টা করুন!",
+                    isConsolation = true
+                )
+            }
         )
     }
 
@@ -175,7 +182,7 @@ fun ResultScreen(
                     horizontalArrangement = Arrangement.Center
                 ) {
                 Icon(
-                    imageVector = Icons.Default.VolumeUp,
+                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
                     contentDescription = "Voice Celebration",
                     tint = AccentCyan,
                     modifier = Modifier.size(18.dp)

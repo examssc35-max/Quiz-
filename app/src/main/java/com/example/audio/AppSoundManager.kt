@@ -114,7 +114,12 @@ class AppSoundManager(private val context: Context) {
     private val confettiPcm: ShortArray by lazy { generateConfettiPcm() }
     private val starPcm: ShortArray by lazy { generateShootingStarPcm() }
     private val fanfarePcm: ShortArray by lazy { generateVictoryFanfarePcm() }
+    private val balloonsPcm: ShortArray by lazy { generateBalloonsPcm() }
     private val consolationPcm: ShortArray by lazy { generateConsolationPcm() }
+
+    @Volatile
+    private var activeCelebrationTrack: AudioTrack? = null
+    private val audioLock = Any()
 
     fun playCelebrationSound(type: CelebrationType, soundEnabled: Boolean) {
         if (!soundEnabled) return
@@ -123,7 +128,7 @@ class AppSoundManager(private val context: Context) {
             CelebrationType.CONFETTI_RAIN -> playPcm(confettiPcm)
             CelebrationType.SHOOTING_STARS -> playPcm(starPcm)
             CelebrationType.GOLDEN_RINGS -> playPcm(fanfarePcm)
-            CelebrationType.BALLOONS_FLOAT -> playPcm(confettiPcm)
+            CelebrationType.BALLOONS_FLOAT -> playPcm(balloonsPcm)
             CelebrationType.CONSOLATION_GLOW -> playPcm(consolationPcm)
         }
     }
@@ -131,6 +136,14 @@ class AppSoundManager(private val context: Context) {
     private fun playPcm(samples: ShortArray) {
         Thread {
             try {
+                synchronized(audioLock) {
+                    try {
+                        activeCelebrationTrack?.stop()
+                        activeCelebrationTrack?.release()
+                    } catch (_: Exception) {}
+                    activeCelebrationTrack = null
+                }
+
                 val sampleRate = 44100
                 val minBuf = AudioTrack.getMinBufferSize(
                     sampleRate,
@@ -167,16 +180,29 @@ class AppSoundManager(private val context: Context) {
                         AudioTrack.MODE_STATIC
                     )
                 }
+
+                synchronized(audioLock) {
+                    activeCelebrationTrack = track
+                }
+
                 track.write(samples, 0, samples.size)
                 track.play()
                 val durationMs = (samples.size * 1000L / sampleRate) + 150L
                 Thread.sleep(durationMs)
-                track.stop()
-                track.release()
+
+                synchronized(audioLock) {
+                    if (activeCelebrationTrack === track) {
+                        try {
+                            track.stop()
+                            track.release()
+                        } catch (_: Exception) {}
+                        activeCelebrationTrack = null
+                    }
+                }
             } catch (e: Exception) {
                 try {
                     toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 220)
-                } catch (t: Exception) {}
+                } catch (_: Exception) {}
             }
         }.start()
     }
@@ -306,6 +332,34 @@ class AppSoundManager(private val context: Context) {
                             Math.sin(2.0 * Math.PI * (f * 2) * nt) * 0.25 +
                             Math.sin(2.0 * Math.PI * (f * 3) * nt) * 0.10
                     sample += tone * env * 0.28
+                }
+            }
+            out[i] = (sample.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
+        }
+        return out
+    }
+
+    private fun generateBalloonsPcm(): ShortArray {
+        val sampleRate = 44100
+        val totalSamples = (sampleRate * 1.15).toInt()
+        val out = ShortArray(totalSamples)
+        // Playful, cheerful ascending bubbly chimes: F5, A5, C6, D6, F6, A6, C7
+        val notes = doubleArrayOf(698.46, 880.00, 1046.50, 1174.66, 1396.91, 1760.00, 2093.00)
+        val rnd = Random(555)
+        for (i in 0 until totalSamples) {
+            val t = i.toDouble() / sampleRate
+            var sample = 0.0
+            for (nIdx in notes.indices) {
+                val noteStart = nIdx * 0.08
+                if (t >= noteStart) {
+                    val nt = t - noteStart
+                    val env = Math.exp(-nt * 5.2)
+                    // Bubbly chirp pitch envelope
+                    val bubbleFreq = notes[nIdx] * (1.0 + 0.12 * Math.exp(-nt * 45.0))
+                    val tone = Math.sin(2.0 * Math.PI * bubbleFreq * nt) * 0.70 +
+                            Math.sin(2.0 * Math.PI * (bubbleFreq * 2.0) * nt) * 0.25
+                    val bubbleNoise = (rnd.nextDouble() * 2.0 - 1.0) * Math.exp(-nt * 60.0) * 0.08
+                    sample += (tone + bubbleNoise) * env * 0.24
                 }
             }
             out[i] = (sample.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
@@ -460,7 +514,7 @@ class AppSoundManager(private val context: Context) {
     private fun speakInternal(text: String, isBengali: Boolean, utteranceId: String) {
         try {
             if (isBengali) {
-                val bnLocale = Locale("bn", "BD")
+                val bnLocale = Locale.forLanguageTag("bn-BD")
                 val res = tts?.setLanguage(bnLocale)
                 if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
                     tts?.setLanguage(Locale.US)
@@ -475,6 +529,13 @@ class AppSoundManager(private val context: Context) {
     }
 
     fun shutdown() {
+        try {
+            synchronized(audioLock) {
+                activeCelebrationTrack?.stop()
+                activeCelebrationTrack?.release()
+                activeCelebrationTrack = null
+            }
+        } catch (_: Exception) {}
         try {
             tts?.stop()
             tts?.shutdown()

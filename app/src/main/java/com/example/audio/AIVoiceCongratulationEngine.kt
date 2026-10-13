@@ -142,6 +142,25 @@ object AIVoiceCongratulationEngine {
     }
 
     /**
+     * Backward-compatible helper for generating praise phrases.
+     */
+    fun generateAppreciationPhrase(
+        isCorrect: Boolean,
+        streak: Int,
+        isBengaliQuiz: Boolean,
+        customWords: List<String> = emptyList(),
+        languagePref: String = "auto"
+    ): String {
+        return if (isCorrect) {
+            val (spoken, _) = generateShortStreakCongratulation(streak, isBengaliQuiz, customWords, languagePref)
+            spoken
+        } else {
+            val (spoken, _) = generateShortConsolation(1, isBengaliQuiz, languagePref)
+            spoken
+        }
+    }
+
+    /**
      * Generates short, punchy completion congratulations for the Result Screen.
      * Keeps it short and avoids long walls of speech.
      */
@@ -168,15 +187,15 @@ object AIVoiceCongratulationEngine {
 
         return if (useBengali) {
             when {
-                accuracy >= 80f -> "$cleanPraise! অসাধারণ পারফরম্যান্স! অভিনন্দন!"
-                accuracy >= 50f -> "$cleanPraise! চমৎকার স্কোর! অভিনন্দন!"
-                else -> "কুইজ সম্পন্ন করার জন্য অভিনন্দন! এগিয়ে যাও!"
+                accuracy >= 80f -> "$cleanPraise! অসাধারণ পারফরম্যান্স! ${summary.score}/${summary.totalQuestions}! অভিনন্দন!"
+                accuracy >= 50f -> "$cleanPraise! চমৎকার স্কোর! ${summary.score}/${summary.totalQuestions}! অভিনন্দন!"
+                else -> "কুইজ সম্পন্ন করার জন্য অভিনন্দন! ${summary.score}/${summary.totalQuestions}!"
             }
         } else {
             when {
-                accuracy >= 80f -> "$cleanPraise! Outstanding performance! Congratulations!"
-                accuracy >= 50f -> "$cleanPraise! Great score! Congratulations!"
-                else -> "Well done on completing the quiz! Keep learning!"
+                accuracy >= 80f -> "$cleanPraise! Outstanding performance! Score: ${summary.score}/${summary.totalQuestions}! Congratulations!"
+                accuracy >= 50f -> "$cleanPraise! Great score! Score: ${summary.score}/${summary.totalQuestions}! Congratulations!"
+                else -> "Well done on completing the quiz! Score: ${summary.score}/${summary.totalQuestions}!"
             }
         }
     }

@@ -18,7 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CheckCircle
@@ -191,7 +191,7 @@ fun QuizDetailScreen(
                         horizontalArrangement = Arrangement.SpaceAround
                     ) {
                         MetaStatPill(
-                            icon = Icons.Default.Assignment,
+                            icon = Icons.AutoMirrored.Filled.Assignment,
                             label = "Questions",
                             value = "${quiz.questionCount}"
                         )
